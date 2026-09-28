@@ -16,7 +16,21 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
+from transporte_concierto import views
 
 urlpatterns = [
+    path('', views.home, name='home'),
+    
+    # Endpoints GET (Consultas SELECT)
+    path('api/pagos/', views.listar_pagos, name='listar_pagos'),
+    path('api/viajes/pendientes/', views.listar_viajes_pendientes, name='viajes_pendientes'),
+    path('api/pasajeros/reservas/', views.listar_pasajeros_reserva, name='pasajeros_reservas'),
+    
+    # Endpoints de Escritura y Eliminación (POST / DELETE)
+    path('api/viajes/nuevo/', views.registrar_viaje_pendiente, name='nuevo_viaje'),
+    path('api/viajes/asignar-vehiculo/', views.asignar_vehiculo, name='asignar_vehiculo'),
+    path('api/viajes/<int:id_viaje>/eliminar/', views.eliminar_viaje, name='eliminar_viaje'),
+    
     path('admin/', admin.site.urls),
+]
 ]
