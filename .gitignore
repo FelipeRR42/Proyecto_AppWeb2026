@@ -6,4 +6,5 @@ db.sqlite3
 .vscode/
 .idea/
 staticfiles/
-CONVERSACION.md
+backup_antiguo.sql
+viajes/management/commands/poblar_datos_prueba.py
