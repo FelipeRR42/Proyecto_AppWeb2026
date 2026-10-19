@@ -92,6 +92,11 @@ DATABASES = {
         'OPTIONS': {'sslmode': 'require'},
     }
 }
+
+# MongoDB Atlas Configuration
+MONGO_URI = config('MONGODB_URI', default=config('MONGO_URI', default=''))
+MONGO_DB_NAME = config('MONGODB_DB_NAME', default=config('MONGO_DB_NAME', default='transporte_conciertos'))
+
 # Password validation
 # https://docs.djangoproject.com/en/6.1/ref/settings/#auth-password-validators
 
