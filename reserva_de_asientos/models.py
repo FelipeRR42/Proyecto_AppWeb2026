@@ -27,6 +27,7 @@ class AsientoViaje(models.Model):
             ('ocupado', 'Ocupado'), 
             ('bloqueado', 'Bloqueado')]
         )
+    bloqueado_hasta = models.DateTimeField(null=True, blank=True)
 
     rut_ocupante = models.CharField(max_length=20, null=True, blank=True)
     nombre_ocupante = models.CharField(max_length=100, null=True, blank=True)
