@@ -6,7 +6,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from reserva_de_asientos.models import AsientoViaje, Pago, Reserva
-from usuarios.models import Administrador, Pasajero
+from usuarios.models import Administrador, Pasajero, Notificacion, PasajeroRecibeNotificacion
 from viajes.models import Vehiculo, Viaje
 
 
@@ -128,9 +128,54 @@ class Command(BaseCommand):
                 )
                 asientos_procesados += 1
 
+        notificaciones_data = [
+            (
+                'Confirmación de itinerario - Los Bunkers en Sausalito',
+                'Estimados pasajeros, el viaje para el concierto de Los Bunkers saldrá puntualmente a las 15:00 hrs desde La Serena. Les recordamos presentarse 15 minutos antes con su cédula de identidad.',
+                [pasajeros[0], pasajeros[1], pasajeros[2]],
+                [True, False, False]
+            ),
+            (
+                'Recomendaciones de seguridad y equipaje',
+                'Para un traslado cómodo y seguro, lleven su entrada descargada o impresa, cargador portátil y abrigo ligero para el retorno nocturno.',
+                pasajeros,
+                [True, True, False, False, True, False]
+            ),
+            (
+                'Punto de retorno en Coquimbo actualizado',
+                'Informamos a los pasajeros con retorno a Coquimbo que la parada oficial será en Plaza de Armas por obras viales.',
+                [pasajeros[1], pasajeros[4]],
+                [True, False]
+            ),
+            (
+                '¡Nuevas fechas abiertas para Coldplay!',
+                'Hemos habilitado nuevos traslados hacia el Estadio Nacional para el concierto de Coldplay. ¡Reserva con anticipación!',
+                [pasajeros[2], pasajeros[3], pasajeros[5]],
+                [False, False, False]
+            ),
+        ]
+
+        notificaciones_procesadas = 0
+        destinatarios_procesados = 0
+        for titulo, cuerpo, receptores, leidos in notificaciones_data:
+            notif, _ = Notificacion.objects.update_or_create(
+                titulo=titulo,
+                id_admin=administrador,
+                defaults={'cuerpo': cuerpo}
+            )
+            notificaciones_procesadas += 1
+            for p, leido in zip(receptores, leidos):
+                PasajeroRecibeNotificacion.objects.update_or_create(
+                    notificacion=notif,
+                    pasajero=p,
+                    defaults={'leido': leido}
+                )
+                destinatarios_procesados += 1
+
         self.stdout.write(self.style.SUCCESS(
             f'Datos de prueba listos: 1 administrador, {len(pasajeros)} pasajeros, '
             f'{len(vehiculos)} vehículos, {len(viajes_data)} viajes, '
-            f'{reservas_procesadas} reservas, {pagos_procesados} pagos y '
-            f'{asientos_procesados} asientos procesados.'
+            f'{reservas_procesadas} reservas, {pagos_procesados} pagos, '
+            f'{asientos_procesados} asientos procesados y '
+            f'{notificaciones_procesadas} notificaciones ({destinatarios_procesados} envíos).'
         ))
