@@ -1,6 +1,8 @@
+from datetime import datetime, time, timezone as datetime_timezone
 from decimal import Decimal
+from hashlib import sha256
 from django.core.management.base import BaseCommand
-from django.utils import timezone
+from bson import ObjectId
 from pymongo import UpdateOne, ASCENDING, TEXT
 
 from config.mongo import get_mongo_db
@@ -11,6 +13,11 @@ from reserva_de_asientos.models import Reserva, AsientoViaje, Pago
 
 class Command(BaseCommand):
     help = 'Migra datos desde PostgreSQL (Neon) hacia MongoDB Atlas creando documentos NoSQL optimizados e índices.'
+
+    @staticmethod
+    def object_id_for(collection, legacy_id):
+        value = f'{collection}:{legacy_id}'.encode('utf-8')
+        return ObjectId(sha256(value).digest()[:12])
 
     def handle(self, *args, **options):
         self.stdout.write(self.style.NOTICE("Iniciando proceso ETL de migración a MongoDB Atlas..."))
@@ -30,6 +37,7 @@ class Command(BaseCommand):
         self.stdout.write("1. Migrando Usuarios, Pasajeros y Administradores...")
         db.usuarios.update_many({}, {"$unset": {"notificaciones": ""}})
         usuarios = Usuario.objects.all()
+        db.usuarios.delete_many({"_id": {"$in": list(usuarios.values_list('id_usuario', flat=True))}})
         operaciones = []
 
         for u in usuarios:
@@ -50,12 +58,14 @@ class Command(BaseCommand):
             if es_admin:
                 a = u.administrador
                 perfil_admin = {
-                    "fecha_contratacion": str(a.fecha_contratacion) if a.fecha_contratacion else None,
+                    "fecha_contratacion": datetime.combine(
+                        a.fecha_contratacion, time.min, tzinfo=datetime_timezone.utc
+                    ) if a.fecha_contratacion else None,
                     "telefono_corporativo": a.telefono_corporativo
                 }
 
             doc_usuario = {
-                "_id": u.id_usuario,
+                "_id": self.object_id_for('usuarios', u.id_usuario),
                 "nombre_completo": u.nombre_completo,
                 "correo_electronico": u.correo_electronico,
                 "contrasenia": u.contrasenia,
@@ -77,20 +87,23 @@ class Command(BaseCommand):
         relaciones = PasajeroRecibeNotificacion.objects.select_related('pasajero').all()
         for relacion in relaciones:
             destinatarios_por_notificacion.setdefault(relacion.notificacion_id, []).append({
-                "id_pasajero": relacion.pasajero_id,
+                "id_pasajero": self.object_id_for('usuarios', relacion.pasajero_id),
                 "leido": relacion.leido
             })
 
         notificaciones = Notificacion.objects.select_related('id_admin').all()
+        db.notificaciones.delete_many({
+            "_id": {"$in": list(notificaciones.values_list('id_notificacion', flat=True))}
+        })
         operaciones = []
         for notificacion in notificaciones:
             doc_notificacion = {
-                "_id": notificacion.id_notificacion,
+                "_id": self.object_id_for('notificaciones', notificacion.id_notificacion),
                 "titulo": notificacion.titulo,
                 "cuerpo": notificacion.cuerpo,
                 "fecha_creacion": notificacion.fecha_creacion,
                 "administrador": {
-                    "id_admin": notificacion.id_admin.id_usuario,
+                    "id_admin": self.object_id_for('usuarios', notificacion.id_admin.id_usuario),
                     "nombre": notificacion.id_admin.nombre_completo
                 },
                 "destinatarios": destinatarios_por_notificacion.get(
@@ -113,11 +126,13 @@ class Command(BaseCommand):
     def migrar_vehiculos(self, db):
         self.stdout.write("3. Migrando Vehículos a su propia colección...")
         vehiculos = Vehiculo.objects.all()
+        db.vehiculos.delete_many({"_id": {"$in": list(vehiculos.values_list('patente', flat=True))}})
+        db.vehiculos.delete_many({"_id": {"$in": ["TEST-01", "TEST-02", "TEST-03", "TEST-04"]}})
         operaciones = []
 
         for v in vehiculos:
             doc_vehiculo = {
-                "_id": v.patente,
+                "_id": self.object_id_for('vehiculos', v.patente),
                 "patente": v.patente,
                 "modelo": v.modelo,
                 "capacidad_maxima": v.capacidad_maxima
@@ -134,8 +149,14 @@ class Command(BaseCommand):
     def migrar_viajes(self, db):
         self.stdout.write("4. Migrando Viajes con Asientos embebidos y Referencia a Vehículo...")
         # Eliminar el documento embebido 'vehiculo' en caso de que existiera en MongoDB
-        db.viajes.update_many({}, {"$unset": {"vehiculo": ""}})
+        db.viajes.update_many({}, {"$unset": {
+            "vehiculo": "",
+            "asientos.id_reserva": "",
+            "asientos.rut_ocupante": "",
+            "asientos.nombre_ocupante": ""
+        }})
         viajes = Viaje.objects.select_related('patente_vehiculo', 'id_admin').prefetch_related('asientoviaje_set').all()
+        db.viajes.delete_many({"_id": {"$in": list(viajes.values_list('id_viaje', flat=True))}})
         operaciones = []
 
         for v in viajes:
@@ -144,21 +165,18 @@ class Command(BaseCommand):
                 asientos_embebidos.append({
                     "num_asiento": a.num_asiento,
                     "estado": a.estado_asiento,
-                    "bloqueado_hasta": a.bloqueado_hasta,
-                    "id_reserva": a.id_reserva_id,
-                    "rut_ocupante": a.rut_ocupante,
-                    "nombre_ocupante": a.nombre_ocupante
+                    "bloqueado_hasta": a.bloqueado_hasta
                 })
 
             admin_doc = None
             if v.id_admin:
                 admin_doc = {
-                    "id_admin": v.id_admin.id_usuario,
+                    "id_admin": self.object_id_for('usuarios', v.id_admin.id_usuario),
                     "nombre": v.id_admin.nombre_completo
                 }
 
             doc_viaje = {
-                "_id": v.id_viaje,
+                "_id": self.object_id_for('viajes', v.id_viaje),
                 "titulo": v.titulo,
                 "artista": v.artista,
                 "recinto": v.recinto,
@@ -172,7 +190,7 @@ class Command(BaseCommand):
                 "precio_ida_y_vuelta": v.precio_ida_y_vuelta,
                 "estado": v.estado,
                 "administrador": admin_doc,
-                "patente_vehiculo": v.patente_vehiculo.patente if v.patente_vehiculo else None,
+                "patente_vehiculo": self.object_id_for('vehiculos', v.patente_vehiculo.patente) if v.patente_vehiculo else None,
                 "asientos": asientos_embebidos
             }
             operaciones.append(UpdateOne({"_id": doc_viaje["_id"]}, {"$set": doc_viaje}, upsert=True))
@@ -186,13 +204,14 @@ class Command(BaseCommand):
     def migrar_reservas(self, db):
         self.stdout.write("5. Migrando Reservas con Pagos embebidos y Referencias Extendidas...")
         reservas = Reserva.objects.select_related('id_pasajero', 'id_viaje').prefetch_related('pago_set', 'asientoviaje_set').all()
+        db.reservas.delete_many({"_id": {"$in": list(reservas.values_list('id_reserva', flat=True))}})
         operaciones = []
 
         for r in reservas:
             pagos_embebidos = []
             for p in r.pago_set.all():
                 pagos_embebidos.append({
-                    "id_pago": p.id_pago,
+                    "id_pago": self.object_id_for('pagos', p.id_pago),
                     "id_transaccion": p.id_transaccion,
                     "monto": float(p.monto) if isinstance(p.monto, Decimal) else p.monto,
                     "metodo_pago": p.metodo_pago,
@@ -203,44 +222,29 @@ class Command(BaseCommand):
             asientos_reservados = []
             for a in r.asientoviaje_set.all():
                 asientos_reservados.append({
-                    "num_asiento": a.num_asiento,
-                    "rut_ocupante": a.rut_ocupante,
-                    "nombre_ocupante": a.nombre_ocupante
+                    "num_asiento": a.num_asiento
                 })
 
-            pasajero_doc = None
-            if r.id_pasajero:
-                pasajero_doc = {
-                    "id_pasajero": r.id_pasajero.id_usuario,
-                    "nombre_completo": r.id_pasajero.nombre_completo,
-                    "correo_electronico": r.id_pasajero.correo_electronico,
-                    "telefono": r.id_pasajero.telefono
-                }
-
-            viaje_doc = None
-            if r.id_viaje:
-                viaje_doc = {
-                    "id_viaje": r.id_viaje.id_viaje,
-                    "titulo": r.id_viaje.titulo,
-                    "artista": r.id_viaje.artista,
-                    "recinto": r.id_viaje.recinto,
-                    "origen": r.id_viaje.origen,
-                    "destino": r.id_viaje.destino,
-                    "fecha_salida": r.id_viaje.fecha_salida
-                }
-
             doc_reserva = {
-                "_id": r.id_reserva,
+                "_id": self.object_id_for('reservas', r.id_reserva),
                 "fecha_reserva": r.fecha_reserva,
                 "estado": r.estado,
                 "tipo_viaje": r.tipo_viaje,
                 "direccion_retorno": r.direccion_retorno,
-                "pasajero": pasajero_doc,
-                "viaje": viaje_doc,
+                "pasajero_titular": {
+                    "id_pasajero": self.object_id_for('usuarios', r.id_pasajero.id_usuario)
+                } if r.id_pasajero else None,
+                "viaje_reservado": {
+                    "id_viaje_reservado": self.object_id_for('viajes', r.id_viaje.id_viaje)
+                } if r.id_viaje else None,
                 "asientos_reservados": asientos_reservados,
                 "pagos": pagos_embebidos
             }
-            operaciones.append(UpdateOne({"_id": doc_reserva["_id"]}, {"$set": doc_reserva}, upsert=True))
+            operaciones.append(UpdateOne(
+                {"_id": doc_reserva["_id"]},
+                {"$set": doc_reserva, "$unset": {"pasajero": "", "viaje": ""}},
+                upsert=True
+            ))
 
         if operaciones:
             res = db.reservas.bulk_write(operaciones)
@@ -259,6 +263,7 @@ class Command(BaseCommand):
 
         # Índices vehículos
         db.vehiculos.create_index([("modelo", ASCENDING)])
+        db.vehiculos.create_index([("patente", ASCENDING)], unique=True)
 
         # Índices viajes
         db.viajes.create_index([("estado", ASCENDING), ("fecha_salida", ASCENDING)])
@@ -268,8 +273,8 @@ class Command(BaseCommand):
         db.viajes.create_index([("patente_vehiculo", ASCENDING)])
 
         # Índices reservas
-        db.reservas.create_index([("pasajero.id_pasajero", ASCENDING), ("fecha_reserva", ASCENDING)])
-        db.reservas.create_index([("viaje.id_viaje", ASCENDING), ("estado", ASCENDING)])
+        db.reservas.create_index([("pasajero_titular.id_pasajero", ASCENDING), ("fecha_reserva", ASCENDING)])
+        db.reservas.create_index([("viaje_reservado.id_viaje_reservado", ASCENDING), ("estado", ASCENDING)])
         db.reservas.create_index([("pagos.id_transaccion", ASCENDING)], unique=True, sparse=True)
 
         self.stdout.write(self.style.SUCCESS("   -> Índices creados satisfactoriamente."))
