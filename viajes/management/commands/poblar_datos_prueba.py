@@ -46,10 +46,10 @@ class Command(BaseCommand):
             pasajeros.append(pasajero)
 
         vehiculos_data = [
-            ('TEST-01', 'Mercedes-Benz Sprinter', 19),
-            ('TEST-02', 'Volvo 9700', 45),
-            ('TEST-03', 'Marcopolo Paradiso', 44),
-            ('TEST-04', 'Mercedes-Benz O500', 42),
+            ('SPGV-30', 'Mercedes-Benz Sprinter', 19),
+            ('GVPZ-19', 'Volvo 9700', 45),
+            ('VZRZ-59', 'Marcopolo Paradiso', 44),
+            ('STGP-20', 'Mercedes-Benz O500', 42),
         ]
         vehiculos = {}
         for patente, modelo, capacidad in vehiculos_data:
