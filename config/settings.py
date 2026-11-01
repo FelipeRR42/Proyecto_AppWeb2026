@@ -42,7 +42,9 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'drf_spectacular',
-    'transporte_concierto',
+    'usuarios',
+    'reserva_de_asientos',
+    'viajes',
 ]
 
 MIDDLEWARE = [
@@ -78,8 +80,6 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
-#postgresql://neondb_owner:npg_xz7Fo5UVRLCW@ep-morning-smoke-b5j01tb1-pooler.c-7.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
-
 
 DATABASES = {
     'default': {
@@ -92,6 +92,11 @@ DATABASES = {
         'OPTIONS': {'sslmode': 'require'},
     }
 }
+
+# MongoDB Atlas Configuration
+MONGO_URI = config('MONGODB_URI', default=config('MONGO_URI', default=''))
+MONGO_DB_NAME = config('MONGODB_DB_NAME', default=config('MONGO_DB_NAME', default='transporte_conciertos'))
+
 # Password validation
 # https://docs.djangoproject.com/en/6.1/ref/settings/#auth-password-validators
 
