@@ -27,6 +27,7 @@ urlpatterns = [
 
     # Endpoints de la API REST
     path('api/', include('usuarios.urls')),
+    path('api/', include('reserva_de_asientos.urls')),
 
     # Esquema OpenAPI (YAML / JSON)
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
