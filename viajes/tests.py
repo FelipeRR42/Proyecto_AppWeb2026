@@ -1,3 +1,151 @@
-from django.test import TestCase
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
-# Create your tests here.
+from bson import ObjectId
+from django.test import SimpleTestCase
+from rest_framework.test import APIClient
+
+
+class ViajeApiTests(SimpleTestCase):
+	def setUp(self):
+		self.client = APIClient()
+		self.viaje_id = ObjectId()
+		self.admin_id = ObjectId()
+		self.vehiculo_id = ObjectId()
+		self.administrador = {
+			'_id': self.admin_id,
+			'nombre_completo': 'Administradora',
+			'rol': 'administrador',
+		}
+		self.vehiculo = {
+			'_id': self.vehiculo_id,
+			'patente': 'ABC123',
+			'capacidad_maxima': 2,
+		}
+		self.viaje = {
+			'_id': self.viaje_id,
+			'titulo': 'Concierto',
+			'artista': 'Banda',
+			'recinto': 'Estadio',
+			'descripcion': 'Viaje al concierto',
+			'origen': 'Ciudad A',
+			'destino': 'Ciudad B',
+			'fecha_salida': datetime(2026, 12, 10, 15, tzinfo=timezone.utc),
+			'fecha_evento': datetime(2026, 12, 10, 20, tzinfo=timezone.utc),
+			'fecha_retorno': datetime(2026, 12, 11, 1, tzinfo=timezone.utc),
+			'precio_ida': 10000,
+			'precio_ida_y_vuelta': 18000,
+			'estado': 'programado',
+			'administrador': {'id_admin': self.admin_id, 'nombre': 'Administradora'},
+			'patente_vehiculo': self.vehiculo_id,
+			'asientos': [
+				{'num_asiento': 1, 'estado': 'disponible', 'bloqueado_hasta': None},
+				{'num_asiento': 2, 'estado': 'disponible', 'bloqueado_hasta': None},
+			],
+		}
+		self.database = MagicMock()
+		self.collection = self.database.viajes
+
+	def _payload(self):
+		return {
+			'titulo': 'Concierto',
+			'artista': 'Banda',
+			'recinto': 'Estadio',
+			'descripcion': 'Viaje al concierto',
+			'origen': 'Ciudad A',
+			'destino': 'Ciudad B',
+			'fecha_salida': '2026-12-10T15:00:00Z',
+			'fecha_evento': '2026-12-10T20:00:00Z',
+			'fecha_retorno': '2026-12-11T01:00:00Z',
+			'precio_ida': 10000,
+			'precio_ida_y_vuelta': 18000,
+			'estado': 'programado',
+			'administrador_id': str(self.admin_id),
+			'patente_vehiculo': 'ABC123',
+		}
+
+	@patch('viajes.views.get_mongo_db')
+	def test_listar_viajes_devuelve_200(self, get_mongo_db):
+		self.collection.find.return_value.sort.return_value = [self.viaje]
+		get_mongo_db.return_value = self.database
+
+		response = self.client.get('/api/viajes/')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.data[0]['id'], str(self.viaje_id))
+
+	@patch('viajes.views.get_mongo_db')
+	def test_crear_viaje_guarda_referencias_y_asientos(self, get_mongo_db):
+		self.database.usuarios.find_one.return_value = self.administrador
+		self.database.vehiculos.find_one.return_value = self.vehiculo
+		self.collection.insert_one.return_value = SimpleNamespace(inserted_id=self.viaje_id)
+		self.collection.find_one.return_value = self.viaje
+		get_mongo_db.return_value = self.database
+
+		response = self.client.post('/api/viajes/', self._payload(), format='json')
+
+		self.assertEqual(response.status_code, 201)
+		documento = self.collection.insert_one.call_args.args[0]
+		self.assertEqual(documento['administrador']['id_admin'], self.admin_id)
+		self.assertEqual(documento['patente_vehiculo'], self.vehiculo_id)
+		self.assertEqual(len(documento['asientos']), 2)
+
+	@patch('viajes.views.get_mongo_db')
+	def test_crear_viaje_rechaza_admin_inexistente(self, get_mongo_db):
+		self.database.usuarios.find_one.return_value = None
+		get_mongo_db.return_value = self.database
+
+		response = self.client.post('/api/viajes/', self._payload(), format='json')
+
+		self.assertEqual(response.status_code, 404)
+		self.collection.insert_one.assert_not_called()
+
+	@patch('viajes.views.get_mongo_db')
+	def test_consultar_viaje_devuelve_200_y_id_invalido_400(self, get_mongo_db):
+		self.collection.find_one.return_value = self.viaje
+		get_mongo_db.return_value = self.database
+
+		response = self.client.get(f'/api/viajes/{self.viaje_id}/')
+		invalid_response = self.client.get('/api/viajes/id-invalido/')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(invalid_response.status_code, 400)
+
+	@patch('viajes.views.get_mongo_db')
+	def test_patch_actualiza_sin_perder_campos_existentes(self, get_mongo_db):
+		self.collection.find_one.side_effect = [self.viaje, self.viaje]
+		self.database.vehiculos.find_one.side_effect = [self.vehiculo, self.vehiculo]
+		self.database.usuarios.find_one.return_value = self.administrador
+		get_mongo_db.return_value = self.database
+
+		response = self.client.patch(
+			f'/api/viajes/{self.viaje_id}/',
+			{'titulo': 'Concierto actualizado'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(self.collection.update_one.call_args.args[1]['$set']['titulo'], 'Concierto actualizado')
+
+	@patch('viajes.views.get_mongo_db')
+	def test_eliminar_viaje_con_reservas_devuelve_409(self, get_mongo_db):
+		self.collection.find_one.return_value = self.viaje
+		self.database.reservas.find_one.return_value = {'_id': ObjectId()}
+		get_mongo_db.return_value = self.database
+
+		response = self.client.delete(f'/api/viajes/{self.viaje_id}/')
+
+		self.assertEqual(response.status_code, 409)
+		self.collection.delete_one.assert_not_called()
+
+	@patch('viajes.views.get_mongo_db')
+	def test_eliminar_viaje_sin_reservas_devuelve_204(self, get_mongo_db):
+		self.collection.find_one.return_value = self.viaje
+		self.database.reservas.find_one.return_value = None
+		get_mongo_db.return_value = self.database
+
+		response = self.client.delete(f'/api/viajes/{self.viaje_id}/')
+
+		self.assertEqual(response.status_code, 204)
+		self.collection.delete_one.assert_called_once_with({'_id': self.viaje_id})
