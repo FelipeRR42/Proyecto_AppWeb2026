@@ -27,6 +27,7 @@ urlpatterns = [
 
     # Endpoints de la API REST
     path('api/', include('usuarios.urls')),
+    path('api/', include('reserva_de_asientos.urls')),
     path('api/viajes/', include('viajes.urls')),
 
     # Esquema OpenAPI (YAML / JSON)
