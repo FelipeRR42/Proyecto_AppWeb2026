@@ -1,117 +1,177 @@
-from unittest.mock import patch
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
-from django.test import TestCase
-from django.urls import reverse
-from django.utils import timezone
-from rest_framework import status
+from bson import ObjectId
+from django.test import SimpleTestCase
 from rest_framework.test import APIClient
 
-from .views import ReservaListCreateView
-from usuarios.models import Administrador, Pasajero
-from viajes.models import Vehiculo, Viaje
-from .models import Reserva
-
-
-class ReservaApiTests(TestCase):
+class ReservaApiTests(SimpleTestCase):
     def setUp(self):
         self.client = APIClient()
-        self.pasajero = Pasajero.objects.create(
-            nombre_completo='Pasajero de prueba',
-            correo_electronico='pasajero@example.com',
-            contrasenia='hashed-password',
-            direccion_retorno_predeterminada='Calle Principal 123',
-            telefono='123456789',
+        self.pasajero_id = ObjectId()
+        self.viaje_id = ObjectId()
+        self.reserva_id = ObjectId()
+        self.pasajero = {
+            '_id': self.pasajero_id,
+            'nombre_completo': 'Pasajero de prueba',
+            'rol': 'pasajero',
+        }
+        self.viaje = {'_id': self.viaje_id, 'titulo': 'Viaje de prueba'}
+        self.reserva = {
+            '_id': self.reserva_id,
+            'fecha_reserva': datetime(2026, 11, 2, tzinfo=timezone.utc),
+            'estado': 'pendiente',
+            'tipo_viaje': 'ida',
+            'direccion_retorno': None,
+            'pasajero_titular': {'id_pasajero': self.pasajero_id},
+            'viaje_reservado': {'id_viaje_reservado': self.viaje_id},
+            'asientos_reservados': [],
+            'pagos': [],
+        }
+        self.reservas = MagicMock()
+        self.usuarios = MagicMock()
+        self.viajes = MagicMock()
+        self.db = SimpleNamespace(
+            reservas=self.reservas,
+            usuarios=self.usuarios,
+            viajes=self.viajes,
         )
-        administrador = Administrador.objects.create(
-            nombre_completo='Administrador de prueba',
-            correo_electronico='admin@example.com',
-            contrasenia='hashed-password',
-            fecha_contratacion=timezone.localdate(),
-            telefono_corporativo='987654321',
-        )
-        vehiculo = Vehiculo.objects.create(
-            patente='TEST-123',
-            modelo='Bus de prueba',
-            capacidad_maxima=40,
-        )
-        ahora = timezone.now()
-        self.viaje = Viaje.objects.create(
-            id_admin=administrador,
-            patente_vehiculo=vehiculo,
-            origen='Santiago',
-            destino='Valparaíso',
-            fecha_evento=ahora,
-            fecha_salida=ahora,
-            fecha_retorno=ahora,
-            precio_ida_y_vuelta=20000,
-            precio_ida=12000,
-            estado='programado',
-            recinto='Recinto de prueba',
-            artista='Artista de prueba',
-            titulo='Viaje de prueba',
-            descripcion='Descripción de prueba',
-        )
-        self.list_url = reverse('reservas-list-create')
+        self.list_url = '/api/reservas/'
 
     def _datos_reserva(self):
         return {
-            'id_pasajero': self.pasajero.pk,
-            'id_viaje': self.viaje.pk,
+            'id_pasajero': str(self.pasajero_id),
+            'id_viaje': str(self.viaje_id),
             'estado': 'pendiente',
             'tipo_viaje': 'ida',
-            'direccion_retorno': '',
+            'direccion_retorno': None,
         }
 
-    def test_crud_reserva(self):
+    @patch('reserva_de_asientos.views.get_mongo_db')
+    def test_listar_devuelve_reservas_de_mongo_con_object_ids(self, get_mongo_db):
+        self.reservas.find.return_value = [self.reserva]
+        get_mongo_db.return_value = self.db
+
         respuesta = self.client.get(self.list_url)
-        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
-        self.assertEqual(respuesta.data, [])
 
-        respuesta = self.client.post(self.list_url, self._datos_reserva(), format='json')
-        self.assertEqual(respuesta.status_code, status.HTTP_201_CREATED)
-        reserva_id = respuesta.data['id_reserva']
-        self.assertEqual(respuesta.data['id_pasajero'], self.pasajero.pk)
-        self.assertEqual(respuesta.data['id_viaje'], self.viaje.pk)
-        self.assertIn('fecha_reserva', respuesta.data)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.data[0]['id_reserva'], str(self.reserva_id))
+        self.assertEqual(respuesta.data[0]['id_pasajero'], str(self.pasajero_id))
+        self.assertEqual(respuesta.data[0]['id_viaje'], str(self.viaje_id))
 
-        detail_url = reverse('reservas-detail', args=[reserva_id])
-        respuesta = self.client.get(detail_url)
-        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
+    @patch('reserva_de_asientos.views.get_mongo_db')
+    def test_crear_guarda_reserva_en_mongo(self, get_mongo_db):
+        self.usuarios.find_one.return_value = self.pasajero
+        self.viajes.find_one.return_value = self.viaje
+        self.reservas.insert_one.return_value = SimpleNamespace(
+            inserted_id=self.reserva_id,
+        )
+        get_mongo_db.return_value = self.db
 
-        datos_actualizados = self._datos_reserva()
-        datos_actualizados['estado'] = 'confirmada'
-        respuesta = self.client.put(detail_url, datos_actualizados, format='json')
-        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
-        self.assertEqual(respuesta.data['estado'], 'confirmada')
+        respuesta = self.client.post(
+            self.list_url,
+            self._datos_reserva(),
+            format='json',
+        )
 
-        respuesta = self.client.patch(detail_url, {'estado': 'cancelada'}, format='json')
-        self.assertEqual(respuesta.status_code, status.HTTP_200_OK)
-        self.assertEqual(respuesta.data['estado'], 'cancelada')
+        self.assertEqual(respuesta.status_code, 201)
+        self.assertEqual(respuesta.data['id_reserva'], str(self.reserva_id))
+        documento = self.reservas.insert_one.call_args.args[0]
+        self.assertEqual(
+            documento['pasajero_titular']['id_pasajero'],
+            self.pasajero_id,
+        )
+        self.assertEqual(
+            documento['viaje_reservado']['id_viaje_reservado'],
+            self.viaje_id,
+        )
+        self.reservas.insert_one.assert_called_once()
 
-        respuesta = self.client.delete(detail_url)
-        self.assertEqual(respuesta.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertFalse(Reserva.objects.filter(pk=reserva_id).exists())
-        self.assertEqual(self.client.get(detail_url).status_code, status.HTTP_404_NOT_FOUND)
+    @patch('reserva_de_asientos.views.get_mongo_db')
+    def test_crud_consultar_actualizar_y_eliminar(self, get_mongo_db):
+        self.usuarios.find_one.return_value = self.pasajero
+        self.viajes.find_one.return_value = self.viaje
+        self.reservas.find_one.side_effect = [
+            self.reserva,
+            self.reserva,
+            {**self.reserva, 'estado': 'confirmada'},
+            self.reserva,
+            {**self.reserva, 'estado': 'cancelada'},
+        ]
+        self.reservas.delete_one.return_value = SimpleNamespace(deleted_count=1)
+        get_mongo_db.return_value = self.db
 
-    def test_creacion_rechaza_datos_invalidos(self):
-        datos = self._datos_reserva()
-        datos['tipo_viaje'] = 'solo_ida'
+        detail_url = f'/api/reservas/{self.reserva_id}/'
+        obtener = self.client.get(detail_url)
+        actualizar = self.client.patch(
+            detail_url,
+            {'estado': 'confirmada'},
+            format='json',
+        )
+        reemplazar = self.client.put(
+            detail_url,
+            {**self._datos_reserva(), 'estado': 'cancelada'},
+            format='json',
+        )
+        eliminar = self.client.delete(detail_url)
 
-        respuesta = self.client.post(self.list_url, datos, format='json')
+        self.assertEqual(obtener.status_code, 200)
+        self.assertEqual(actualizar.status_code, 200)
+        self.assertEqual(actualizar.data['estado'], 'confirmada')
+        self.assertEqual(reemplazar.status_code, 200)
+        self.assertEqual(eliminar.status_code, 204)
+        self.reservas.delete_one.assert_called_once_with({'_id': self.reserva_id})
 
-        self.assertEqual(respuesta.status_code, status.HTTP_400_BAD_REQUEST)
+    @patch('reserva_de_asientos.views.get_mongo_db')
+    def test_identificador_invalido_devuelve_400(self, get_mongo_db):
+        respuesta = self.client.get('/api/reservas/no-es-object-id/')
 
-    def test_detalle_inexistente_devuelve_404(self):
-        respuesta = self.client.get(reverse('reservas-detail', args=[999999]))
+        self.assertEqual(respuesta.status_code, 400)
+        get_mongo_db.assert_not_called()
 
-        self.assertEqual(respuesta.status_code, status.HTTP_404_NOT_FOUND)
+    @patch('reserva_de_asientos.views.get_mongo_db')
+    def test_reserva_inexistente_devuelve_404(self, get_mongo_db):
+        self.reservas.find_one.return_value = None
+        get_mongo_db.return_value = self.db
+
+        respuesta = self.client.get(f'/api/reservas/{self.reserva_id}/')
+
+        self.assertEqual(respuesta.status_code, 404)
         self.assertEqual(respuesta.data, {'detail': 'Reserva no encontrada.'})
 
-    @patch.object(ReservaListCreateView, 'get_queryset', side_effect=RuntimeError('Error inesperado'))
-    def test_error_interno_devuelve_respuesta_json_estandar(self, _get_queryset):
+    @patch('reserva_de_asientos.views.get_mongo_db')
+    def test_referencia_inexistente_devuelve_404(self, get_mongo_db):
+        self.usuarios.find_one.return_value = None
+        get_mongo_db.return_value = self.db
+
+        respuesta = self.client.post(
+            self.list_url,
+            self._datos_reserva(),
+            format='json',
+        )
+
+        self.assertEqual(respuesta.status_code, 404)
+        self.reservas.insert_one.assert_not_called()
+
+    @patch('reserva_de_asientos.views.get_mongo_db', side_effect=ValueError('MongoDB no disponible'))
+    def test_error_de_mongo_devuelve_500_estandar(self, _get_mongo_db):
         respuesta = self.client.get(self.list_url)
 
-        self.assertEqual(respuesta.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertEqual(respuesta.status_code, 500)
+        self.assertEqual(
+            respuesta.data,
+            {'detail': 'Error interno al procesar la solicitud.'},
+        )
+
+    @patch('reserva_de_asientos.views.get_mongo_db')
+    def test_error_inesperado_devuelve_500_estandar(self, get_mongo_db):
+        self.reservas.find.side_effect = RuntimeError('Error inesperado')
+        get_mongo_db.return_value = self.db
+
+        respuesta = self.client.get(self.list_url)
+
+        self.assertEqual(respuesta.status_code, 500)
         self.assertEqual(
             respuesta.data,
             {'detail': 'Error interno al procesar la solicitud.'},
