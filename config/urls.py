@@ -26,6 +26,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
 
     # Endpoints de la API REST
+    path('api/vehiculos/', include('viajes.vehiculos_urls')),
     path('api/', include('usuarios.urls')),
     path('api/', include('reserva_de_asientos.urls')),
     path('api/viajes/', include('viajes.urls')),

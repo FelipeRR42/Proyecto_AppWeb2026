@@ -149,3 +149,97 @@ class ViajeApiTests(SimpleTestCase):
 
 		self.assertEqual(response.status_code, 204)
 		self.collection.delete_one.assert_called_once_with({'_id': self.viaje_id})
+
+
+class VehiculoApiTests(SimpleTestCase):
+	def setUp(self):
+		self.client = APIClient()
+		self.vehiculo_id = ObjectId()
+		self.vehiculo = {
+			'_id': self.vehiculo_id,
+			'patente': 'ABC123',
+			'modelo': 'Bus urbano',
+			'capacidad_maxima': 32,
+		}
+		self.database = MagicMock()
+		self.collection = self.database.vehiculos
+
+	@patch('viajes.vehiculos_api.get_mongo_db')
+	def test_listar_vehiculos_devuelve_200(self, get_mongo_db):
+		self.collection.find.return_value.sort.return_value = [self.vehiculo]
+		get_mongo_db.return_value = self.database
+
+		response = self.client.get('/api/vehiculos/')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.data[0]['patente'], 'ABC123')
+
+	@patch('viajes.vehiculos_api.get_mongo_db')
+	def test_crear_vehiculo_devuelve_201(self, get_mongo_db):
+		self.collection.find_one.side_effect = [None, self.vehiculo]
+		self.collection.insert_one.return_value = SimpleNamespace(inserted_id=self.vehiculo_id)
+		get_mongo_db.return_value = self.database
+
+		response = self.client.post('/api/vehiculos/', {
+			'patente': 'ABC123',
+			'modelo': 'Bus urbano',
+			'capacidad_maxima': 32,
+		}, format='json')
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(self.collection.insert_one.call_args.args[0]['capacidad_maxima'], 32)
+
+	@patch('viajes.vehiculos_api.get_mongo_db')
+	def test_patente_duplicada_devuelve_409_y_capacidad_invalida_400(self, get_mongo_db):
+		self.collection.find_one.return_value = self.vehiculo
+		get_mongo_db.return_value = self.database
+
+		duplicate_response = self.client.post('/api/vehiculos/', {
+			'patente': 'ABC123',
+			'modelo': 'Bus urbano',
+			'capacidad_maxima': 32,
+		}, format='json')
+		invalid_response = self.client.post('/api/vehiculos/', {
+			'patente': 'XYZ123',
+			'modelo': 'Bus urbano',
+			'capacidad_maxima': 0,
+		}, format='json')
+
+		self.assertEqual(duplicate_response.status_code, 409)
+		self.assertEqual(invalid_response.status_code, 400)
+
+	@patch('viajes.vehiculos_api.get_mongo_db')
+	def test_consultar_actualizar_y_eliminar_vehiculo(self, get_mongo_db):
+		self.collection.find_one.side_effect = [
+			self.vehiculo,
+			self.vehiculo,
+			self.vehiculo,
+			self.vehiculo,
+		]
+		self.collection.update_one.return_value = SimpleNamespace(modified_count=1)
+		self.database.viajes.find_one.return_value = None
+		self.collection.delete_one.return_value = SimpleNamespace(deleted_count=1)
+		get_mongo_db.return_value = self.database
+
+		get_response = self.client.get('/api/vehiculos/ABC123/')
+		patch_response = self.client.patch(
+			'/api/vehiculos/ABC123/',
+			{'modelo': 'Bus actualizado'},
+			format='json',
+		)
+		delete_response = self.client.delete('/api/vehiculos/ABC123/')
+
+		self.assertEqual(get_response.status_code, 200)
+		self.assertEqual(patch_response.status_code, 200)
+		self.assertEqual(delete_response.status_code, 204)
+
+	@patch('viajes.vehiculos_api.get_mongo_db')
+	def test_no_elimina_vehiculo_asociado_a_viajes(self, get_mongo_db):
+		self.collection.find_one.return_value = self.vehiculo
+		self.database.viajes.find_one.return_value = {'_id': ObjectId()}
+		get_mongo_db.return_value = self.database
+
+		response = self.client.delete('/api/vehiculos/ABC123/')
+
+		self.assertEqual(response.status_code, 409)
+		self.collection.delete_one.assert_not_called()
