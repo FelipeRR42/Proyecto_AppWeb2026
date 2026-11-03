@@ -4,6 +4,7 @@ import type { Trip } from '../types/trip'
 
 type TripCardProps = {
   trip: Trip
+  onChooseSeat: (tripId: string) => void
 }
 
 const dateFormatter = new Intl.DateTimeFormat('es-CL', {
@@ -37,7 +38,7 @@ function formatDateTime(value: string) {
   return Number.isNaN(date.getTime()) ? 'Por confirmar' : dateTimeFormatter.format(date)
 }
 
-export default function TripCard({ trip }: TripCardProps) {
+export default function TripCard({ trip, onChooseSeat }: TripCardProps) {
   const [expanded, setExpanded] = useState(false)
   const seats = trip.asientos
   const availableSeats = seats?.filter((seat) => seat.estado === 'disponible').length
@@ -110,14 +111,24 @@ export default function TripCard({ trip }: TripCardProps) {
           <strong>{currencyFormatter.format(trip.precio_ida)}</strong>
           <small>{currencyFormatter.format(trip.precio_ida_y_vuelta)} ida y vuelta</small>
         </div>
-        <button
-          className="trip-select"
-          type="button"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((current) => !current)}
-        >
-          {expanded ? 'Cerrar' : 'Ver viaje'}
-        </button>
+        <div className="trip-card-actions">
+          <button
+            className="trip-details-toggle"
+            type="button"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? 'Cerrar' : 'Ver viaje'}
+          </button>
+          <button
+            className="trip-select"
+            type="button"
+            disabled={isFull || !seats?.length}
+            onClick={() => onChooseSeat(trip.id)}
+          >
+            Elegir asiento
+          </button>
+        </div>
       </div>
     </article>
   )

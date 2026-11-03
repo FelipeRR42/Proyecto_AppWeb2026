@@ -1,6 +1,6 @@
 import { isTrip, type Trip } from '../types/trip'
 
-const API_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
+export const API_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
 
 export async function getUpcomingTrips(signal?: AbortSignal): Promise<Trip[]> {
   const response = await fetch(`${API_URL}/viajes/`, {
@@ -28,4 +28,22 @@ export async function getUpcomingTrips(signal?: AbortSignal): Promise<Trip[]> {
         new Date(first.fecha_salida).getTime() -
         new Date(second.fecha_salida).getTime(),
     )
+}
+
+export async function getTripById(id: string, signal?: AbortSignal): Promise<Trip> {
+  const response = await fetch(`${API_URL}/viajes/${encodeURIComponent(id)}/`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+
+  if (!response.ok) {
+    throw new Error(`No se pudo cargar el viaje (HTTP ${response.status}).`)
+  }
+
+  const data: unknown = await response.json()
+  if (!isTrip(data)) {
+    throw new Error('La API devolvió un viaje con un formato inesperado.')
+  }
+
+  return data
 }

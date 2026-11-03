@@ -7,6 +7,7 @@ type TripsSectionProps = {
   loading: boolean
   error: string | null
   onRetry: () => void
+  onChooseSeat: (tripId: string) => void
 }
 
 export default function TripsSection({
@@ -14,6 +15,7 @@ export default function TripsSection({
   loading,
   error,
   onRetry,
+  onChooseSeat,
 }: TripsSectionProps) {
   return (
     <section className="trips-section" id="viajes">
@@ -57,7 +59,7 @@ export default function TripsSection({
       {!loading && !error && trips.length > 0 && (
         <div className="trip-grid">
           {trips.slice(0, 3).map((trip) => (
-            <TripCard key={trip.id} trip={trip} />
+            <TripCard key={trip.id} trip={trip} onChooseSeat={onChooseSeat} />
           ))}
         </div>
       )}
