@@ -76,6 +76,34 @@ class ViajeApiTests(SimpleTestCase):
 		self.assertEqual(response.data[0]['id'], str(self.viaje_id))
 
 	@patch('viajes.views.get_mongo_db')
+	def test_listar_viajes_serializa_asientos_bloqueados_sin_id_interno(self, get_mongo_db):
+		reserva_id = ObjectId()
+		viaje = {
+			**self.viaje,
+			'asientos': [{
+				'num_asiento': 1,
+				'estado': 'bloqueado',
+				'bloqueado_hasta': datetime(2026, 12, 10, 15, 5, tzinfo=timezone.utc),
+				'reserva_id': reserva_id,
+			}],
+		}
+		self.collection.find.return_value.sort.return_value = [viaje]
+		get_mongo_db.return_value = self.database
+
+		response = self.client.get('/api/viajes/')
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(
+			response.data[0]['asientos'],
+			[{
+				'num_asiento': 1,
+				'estado': 'bloqueado',
+				'bloqueado_hasta': '2026-12-10T15:05:00Z',
+			}],
+		)
+		self.assertNotIn(str(reserva_id), response.content.decode())
+
+	@patch('viajes.views.get_mongo_db')
 	def test_crear_viaje_guarda_referencias_y_asientos(self, get_mongo_db):
 		self.database.usuarios.find_one.return_value = self.administrador
 		self.database.vehiculos.find_one.return_value = self.vehiculo
