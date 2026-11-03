@@ -109,19 +109,21 @@ export async function registerPassenger({
   name,
   email,
   phone,
+  address,
   password,
 }: {
   name: string
   email: string
   phone: string
+  address: string
   password: string
 }): Promise<void> {
-  const { response, data } = await postAuthRequest('/auth/register/', {
+  const { response, data } = await postAuthRequest('/pasajeros/', {
     nombre_completo: name,
     correo_electronico: email,
-    telefono: phone,
     contrasenia: password,
-    rol: 'pasajero',
+    direccion_retorno_predeterminada: address,
+    telefono: phone,
   })
 
   if (!response.ok) {

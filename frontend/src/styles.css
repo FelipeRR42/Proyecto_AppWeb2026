@@ -117,6 +117,13 @@ a:focus-visible {
   font-weight: 600;
 }
 
+.back-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
 .account-button-primary {
   border-color: var(--blue);
   background: var(--blue);
@@ -1994,6 +2001,10 @@ a:focus-visible {
   width: min(380px, 100%);
 }
 
+.login-content > .back-button {
+  margin-bottom: 14px;
+}
+
 .login-brand {
   display: flex;
   width: fit-content;
@@ -2064,6 +2075,14 @@ a:focus-visible {
 
 .login-form input::placeholder {
   color: #92949c;
+}
+
+.login-form input[aria-invalid='true'] {
+  border-color: #b94a48;
+}
+
+.field-error {
+  margin: -4px 0 2px;
 }
 
 .login-submit {
