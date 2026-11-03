@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from config.mongo import get_mongo_db
+from reserva_de_asientos.services import liberar_bloqueos_vencidos
 from .serializers import ViajeReadSerializer, ViajeWriteSerializer
 
 
@@ -80,12 +81,14 @@ class ViajeListCreateView(APIView):
 	)
 	def get(self, request):
 		try:
+			db = get_mongo_db()
+			liberar_bloqueos_vencidos(db)
 			query = {}
 			for field in ('estado', 'origen', 'destino', 'artista'):
 				value = request.query_params.get(field)
 				if value:
 					query[field] = value
-			viajes = list(_viajes_collection().find(query).sort('fecha_salida', 1))
+			viajes = list(db.viajes.find(query).sort('fecha_salida', 1))
 			return Response(ViajeReadSerializer(viajes, many=True).data)
 		except Exception:
 			return _error_servidor()
@@ -126,7 +129,10 @@ class ViajeDetailView(APIView):
 		if not ObjectId.is_valid(viaje_id):
 			return Response({'detail': 'Identificador inválido.'}, status=status.HTTP_400_BAD_REQUEST)
 		try:
-			viaje = _viajes_collection().find_one({'_id': ObjectId(viaje_id)})
+			db = get_mongo_db()
+			object_id = ObjectId(viaje_id)
+			liberar_bloqueos_vencidos(db, viaje_id=object_id)
+			viaje = db.viajes.find_one({'_id': object_id})
 			if viaje is None:
 				return Response({'detail': 'Viaje no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
 			return Response(ViajeReadSerializer(viaje).data)
