@@ -1,9 +1,40 @@
-import { isTrip, type Trip } from '../types/trip'
+import { isTrip, type Trip, type TripFilters } from '../types/trip'
 
 const API_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
 
-export async function getUpcomingTrips(signal?: AbortSignal): Promise<Trip[]> {
-  const response = await fetch(`${API_URL}/viajes/`, {
+function localDate(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: 'America/Santiago',
+  }).formatToParts(date)
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? ''
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+
+function getAvailableSeats(trip: Trip) {
+  return trip.asientos?.filter((seat) => seat.estado === 'disponible').length
+}
+
+export async function getUpcomingTrips(
+  filters: TripFilters,
+  signal?: AbortSignal,
+): Promise<Trip[]> {
+  const searchParams = new URLSearchParams({
+    fecha_desde: filters.fecha,
+    origen: filters.origen,
+    artista: filters.artista,
+    precio_minimo: filters.precioMinimo,
+    precio_maximo: filters.precioMaximo,
+    cupos_minimos: filters.cuposMinimos,
+    orden: filters.orden,
+  })
+
+  const response = await fetch(`${API_URL}/viajes/?${searchParams.toString()}`, {
     headers: { Accept: 'application/json' },
     signal,
   })
@@ -17,15 +48,37 @@ export async function getUpcomingTrips(signal?: AbortSignal): Promise<Trip[]> {
     throw new Error('La API devolvió una respuesta de viajes con un formato inesperado.')
   }
 
+  const minimumPrice = filters.precioMinimo ? Number(filters.precioMinimo) : undefined
+  const maximumPrice = filters.precioMaximo ? Number(filters.precioMaximo) : undefined
+  const minimumSeats = filters.cuposMinimos ? Number(filters.cuposMinimos) : undefined
+
   return data
-    .filter(
-      (trip) =>
+    .filter((trip) => {
+      const availableSeats = getAvailableSeats(trip)
+      return (
         (trip.estado === 'programado' || trip.estado === 'lleno') &&
-        new Date(trip.fecha_salida).getTime() >= Date.now(),
-    )
+        new Date(trip.fecha_salida).getTime() >= Date.now() &&
+        (!filters.fecha || localDate(trip.fecha_evento) >= filters.fecha) &&
+        (!filters.origen || trip.origen === filters.origen) &&
+        (!filters.artista || trip.artista === filters.artista) &&
+        (minimumPrice === undefined || trip.precio_ida >= minimumPrice) &&
+        (maximumPrice === undefined || trip.precio_ida <= maximumPrice) &&
+        (minimumSeats === undefined ||
+          (availableSeats !== undefined && availableSeats >= minimumSeats))
+      )
+    })
     .sort(
-      (first, second) =>
-        new Date(first.fecha_salida).getTime() -
-        new Date(second.fecha_salida).getTime(),
+      (first, second) => {
+        if (filters.orden === 'precio_asc') {
+          return first.precio_ida - second.precio_ida
+        }
+        if (filters.orden === 'precio_desc') {
+          return second.precio_ida - first.precio_ida
+        }
+        return (
+          new Date(first.fecha_salida).getTime() -
+          new Date(second.fecha_salida).getTime()
+        )
+      },
     )
 }
