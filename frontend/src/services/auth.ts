@@ -152,7 +152,14 @@ export function getSessionUser(): SessionUser | null {
       typeof user.telefono === 'string' &&
       typeof user.direccion_retorno_predeterminada === 'string'
     ) {
-      return user as SessionUser
+      return {
+        id: user.id,
+        role: user.role,
+        nombre_completo: user.nombre_completo,
+        correo_electronico: user.correo_electronico,
+        telefono: user.telefono,
+        direccion_retorno_predeterminada: user.direccion_retorno_predeterminada,
+      }
     }
   } catch {
     sessionStorage.removeItem('session_user')
