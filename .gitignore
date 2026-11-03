@@ -8,3 +8,8 @@ db.sqlite3
 staticfiles/
 backup_antiguo.sql
 viajes/management/commands/poblar_datos_prueba.py
+Mockups
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+frontend/.env.*.local
