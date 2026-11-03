@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import { BusFront } from 'lucide-react'
-import HowItWorks from './components/HowItWorks'
 import HeroSection from './components/HeroSection'
+import HomeTripsSection from './components/HomeTripsSection'
+import HowItWorks from './components/HowItWorks'
+import LoginPage from './components/LoginPage'
+import RegisterPage from './components/RegisterPage'
 import ReservationView from './components/ReservationView'
 import SiteHeader from './components/SiteHeader'
 import TripsSection from './components/TripsSection'
-import { getTripById, getUpcomingTrips } from './services/trips'
+import { getTripById } from './services/trips'
 import type { Trip } from './types/trip'
 
 export default function App() {
-  const [trips, setTrips] = useState<Trip[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null)
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null)
@@ -19,41 +19,16 @@ export default function App() {
   const [selectedTripError, setSelectedTripError] = useState<string | null>(null)
   const [selectedTripReloadKey, setSelectedTripReloadKey] = useState(0)
 
-  const retry = useCallback(() => setReloadKey((key) => key + 1), [])
-  const retrySelectedTrip = useCallback(
-    () => setSelectedTripReloadKey((key) => key + 1),
-    [],
-  )
+  const retryTrips = useCallback(() => setReloadKey((key) => key + 1), [])
+  const retrySelectedTrip = useCallback(() => {
+    setSelectedTripReloadKey((key) => key + 1)
+    retryTrips()
+  }, [retryTrips])
   const openTripReservation = useCallback((tripId: string) => {
     setSelectedTrip(null)
     setSelectedTripLoading(true)
     setSelectedTripId(tripId)
   }, [])
-
-  useEffect(() => {
-    const controller = new AbortController()
-
-    async function loadTrips() {
-      setLoading(true)
-      setError(null)
-
-      try {
-        setTrips(await getUpcomingTrips(controller.signal))
-      } catch (reason) {
-        if (controller.signal.aborted) return
-        setError(
-          reason instanceof Error
-            ? reason.message
-            : 'Ocurrió un error inesperado al consultar la API.',
-        )
-      } finally {
-        if (!controller.signal.aborted) setLoading(false)
-      }
-    }
-
-    void loadTrips()
-    return () => controller.abort()
-  }, [reloadKey])
 
   useEffect(() => {
     if (!selectedTripId) {
@@ -87,6 +62,10 @@ export default function App() {
     return () => controller.abort()
   }, [selectedTripId, selectedTripReloadKey])
 
+  const pathname = window.location.pathname.replace(/\/+$/, '') || '/'
+  if (pathname === '/login') return <LoginPage />
+  if (pathname === '/registro') return <RegisterPage />
+
   return (
     <>
       <SiteHeader />
@@ -99,6 +78,15 @@ export default function App() {
             onBack={() => setSelectedTripId(null)}
             onRetry={retrySelectedTrip}
           />
+        ) : pathname === '/viajes' ? (
+          <section className="search-page">
+            <p className="section-kicker">Encuentra tu próximo viaje</p>
+            <h1 className="page-title">Buscar viajes</h1>
+            <TripsSection
+              onChooseSeat={openTripReservation}
+              reloadKey={reloadKey}
+            />
+          </section>
         ) : (
           <>
             <HeroSection />
@@ -116,12 +104,9 @@ export default function App() {
                 <span><strong>Ida y vuelta</strong> para volver sin preocupaciones</span>
               </div>
             </section>
-            <TripsSection
-              trips={trips}
-              loading={loading}
-              error={error}
-              onRetry={retry}
+            <HomeTripsSection
               onChooseSeat={openTripReservation}
+              reloadKey={reloadKey}
             />
             <HowItWorks />
           </>
