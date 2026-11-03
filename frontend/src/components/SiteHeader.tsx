@@ -12,12 +12,12 @@ export default function SiteHeader() {
 
       <nav className="header-actions" aria-label="Cuenta">
         <span className="header-route">Ovalle <span aria-hidden="true">→</span> Santiago</span>
-        <button className="account-button" type="button" disabled aria-label="Inicio de sesión próximamente">
+        <a className="account-button" href="/login">
           Ingresar
-        </button>
-        <button className="account-button account-button-primary" type="button" disabled aria-label="Registro próximamente">
+        </a>
+        <a className="account-button account-button-primary" href="/registro">
           Registrarse
-        </button>
+        </a>
       </nav>
     </header>
   )
