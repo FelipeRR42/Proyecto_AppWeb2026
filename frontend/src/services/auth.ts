@@ -2,9 +2,19 @@ const API_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
 
 export type UserRole = 'pasajero' | 'administrador'
 
+export interface SessionUser {
+  id: string
+  role: UserRole
+  nombre_completo: string
+  correo_electronico: string
+  telefono: string
+  direccion_retorno_predeterminada: string
+}
+
 interface LoginResponse {
   access: string
   role: UserRole
+  user: SessionUser
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -102,7 +112,53 @@ export async function login(
     throw new Error('El servidor devolvió datos de sesión incompletos o inválidos.')
   }
 
-  return { access, role }
+  if (
+    typeof user.id !== 'string' ||
+    typeof user.nombre_completo !== 'string' ||
+    typeof user.correo_electronico !== 'string'
+  ) {
+    throw new Error('El servidor no devolvió los datos del perfil de usuario.')
+  }
+
+  return {
+    access,
+    role,
+    user: {
+      id: user.id,
+      role,
+      nombre_completo: user.nombre_completo,
+      correo_electronico: user.correo_electronico,
+      telefono: typeof user.telefono === 'string' ? user.telefono : '',
+      direccion_retorno_predeterminada:
+        typeof user.direccion_retorno_predeterminada === 'string'
+          ? user.direccion_retorno_predeterminada
+          : '',
+    },
+  }
+}
+
+export function getSessionUser(): SessionUser | null {
+  const storedUser = sessionStorage.getItem('session_user')
+  if (!storedUser) return null
+
+  try {
+    const user: unknown = JSON.parse(storedUser)
+    if (
+      isRecord(user) &&
+      typeof user.id === 'string' &&
+      (user.role === 'pasajero' || user.role === 'administrador') &&
+      typeof user.nombre_completo === 'string' &&
+      typeof user.correo_electronico === 'string' &&
+      typeof user.telefono === 'string' &&
+      typeof user.direccion_retorno_predeterminada === 'string'
+    ) {
+      return user as SessionUser
+    }
+  } catch {
+    sessionStorage.removeItem('session_user')
+  }
+
+  return null
 }
 
 export async function registerPassenger({

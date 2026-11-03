@@ -27,8 +27,8 @@ class UsuarioReadSerializer(serializers.Serializer):
 
 class PerfilUsuarioWriteSerializer(serializers.Serializer):
     nombre_completo = serializers.CharField(max_length=200)
-    correo_electronico = serializers.EmailField()
-    contrasenia = serializers.CharField(write_only=True, min_length=8, max_length=128)
+    correo_electronico = serializers.CharField(max_length=254)
+    contrasenia = serializers.CharField(write_only=True, max_length=128, trim_whitespace=False)
 
 
 class PasajeroWriteSerializer(PerfilUsuarioWriteSerializer):
@@ -39,3 +39,8 @@ class PasajeroWriteSerializer(PerfilUsuarioWriteSerializer):
 class AdministradorWriteSerializer(PerfilUsuarioWriteSerializer):
     fecha_contratacion = serializers.DateField()
     telefono_corporativo = serializers.CharField(max_length=20)
+
+
+class LoginWriteSerializer(serializers.Serializer):
+    correo_electronico = serializers.CharField(max_length=254)
+    contrasenia = serializers.CharField(write_only=True, trim_whitespace=False)

@@ -130,6 +130,35 @@ a:focus-visible {
   color: #fff;
 }
 
+.account-profile {
+  display: grid;
+  max-width: 190px;
+  gap: 2px;
+  color: #34363c;
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.account-profile strong,
+.account-profile span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-profile span {
+  color: #747680;
+  font-size: 9px;
+}
+
+.account-logout {
+  display: grid;
+  width: 30px;
+  padding: 0;
+  place-items: center;
+  cursor: pointer;
+}
+
 .account-button:disabled {
   cursor: not-allowed;
   opacity: 0.78;
@@ -1057,6 +1086,22 @@ a:focus-visible {
   opacity: 0.7;
 }
 
+.reservation-account-summary {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid #dfe1e6;
+  border-radius: 5px;
+  color: #62656e;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.reservation-account-summary strong {
+  color: #35373e;
+  font-size: 10px;
+}
+
 .reservation-form-note,
 .reservation-action-error,
 .reservation-action-message {
@@ -1416,6 +1461,20 @@ a:focus-visible {
     min-height: 26px;
     padding: 0 7px;
     font-size: 9px;
+  }
+
+  .account-profile {
+    max-width: 112px;
+    font-size: 9px;
+  }
+
+  .account-profile span {
+    font-size: 8px;
+  }
+
+  .account-logout {
+    width: 26px;
+    min-width: 26px;
   }
 
   .hero-section {

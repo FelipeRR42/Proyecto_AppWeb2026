@@ -10,7 +10,7 @@ export default defineConfig({
       '/api': {
         target:
           process.env.API_PROXY_TARGET ??
-          'https://proyecto-appweb2026-xrvt.onrender.com',
+          'http://127.0.0.1:8000',
         changeOrigin: true,
       },
     },
