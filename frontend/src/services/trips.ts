@@ -2,37 +2,37 @@ import { isTrip, type Trip, type TripFilters } from '../types/trip'
 
 export const API_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
 
-function localDate(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    timeZone: 'America/Santiago',
-  }).formatToParts(date)
-  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? ''
-  return `${part('year')}-${part('month')}-${part('day')}`
-}
-
-function getAvailableSeats(trip: Trip) {
-  return trip.asientos?.filter((seat) => seat.estado === 'disponible').length
+async function getApiError(response: Response) {
+  try {
+    const data: unknown = await response.json()
+    if (typeof data === 'object' && data !== null) {
+      const messages = Object.values(data as Record<string, unknown>)
+        .flatMap((value) => Array.isArray(value) ? value : [value])
+        .filter((value): value is string => typeof value === 'string')
+      if (messages.length > 0) return messages.join(' ')
+    }
+  } catch {
+    // Use the status-based message for non-JSON error responses.
+  }
+  return `No se pudieron cargar los viajes (HTTP ${response.status}).`
 }
 
 export async function getUpcomingTrips(
   filters: TripFilters,
   signal?: AbortSignal,
 ): Promise<Trip[]> {
-  const searchParams = new URLSearchParams({
-    fecha_desde: filters.fecha,
-    origen: filters.origen,
-    artista: filters.artista,
-    precio_minimo: filters.precioMinimo,
-    precio_maximo: filters.precioMaximo,
-    cupos_minimos: filters.cuposMinimos,
-    orden: filters.orden,
-  })
+  const searchParams = new URLSearchParams({ proximos: 'true', orden: filters.orden })
+  const activeFilters: Array<[string, string]> = [
+    ['fecha_desde', filters.fecha],
+    ['origen', filters.origen],
+    ['artista', filters.artista],
+    ['precio_minimo', filters.precioMinimo],
+    ['precio_maximo', filters.precioMaximo],
+    ['cupos_minimos', filters.cuposMinimos],
+  ]
+  for (const [key, value] of activeFilters) {
+    if (value) searchParams.set(key, value)
+  }
 
   const response = await fetch(`${API_URL}/viajes/?${searchParams.toString()}`, {
     headers: { Accept: 'application/json' },
@@ -40,7 +40,7 @@ export async function getUpcomingTrips(
   })
 
   if (!response.ok) {
-    throw new Error(`No se pudieron cargar los viajes (HTTP ${response.status}).`)
+    throw new Error(await getApiError(response))
   }
 
   const data: unknown = await response.json()
@@ -48,39 +48,7 @@ export async function getUpcomingTrips(
     throw new Error('La API devolvió una respuesta de viajes con un formato inesperado.')
   }
 
-  const minimumPrice = filters.precioMinimo ? Number(filters.precioMinimo) : undefined
-  const maximumPrice = filters.precioMaximo ? Number(filters.precioMaximo) : undefined
-  const minimumSeats = filters.cuposMinimos ? Number(filters.cuposMinimos) : undefined
-
   return data
-    .filter((trip) => {
-      const availableSeats = getAvailableSeats(trip)
-      return (
-        (trip.estado === 'programado' || trip.estado === 'lleno') &&
-        new Date(trip.fecha_salida).getTime() >= Date.now() &&
-        (!filters.fecha || localDate(trip.fecha_evento) >= filters.fecha) &&
-        (!filters.origen || trip.origen === filters.origen) &&
-        (!filters.artista || trip.artista === filters.artista) &&
-        (minimumPrice === undefined || trip.precio_ida >= minimumPrice) &&
-        (maximumPrice === undefined || trip.precio_ida <= maximumPrice) &&
-        (minimumSeats === undefined ||
-          (availableSeats !== undefined && availableSeats >= minimumSeats))
-      )
-    })
-    .sort(
-      (first, second) => {
-        if (filters.orden === 'precio_asc') {
-          return first.precio_ida - second.precio_ida
-        }
-        if (filters.orden === 'precio_desc') {
-          return second.precio_ida - first.precio_ida
-        }
-        return (
-          new Date(first.fecha_salida).getTime() -
-          new Date(second.fecha_salida).getTime()
-        )
-      },
-    )
 }
 
 export async function getTripById(id: string, signal?: AbortSignal): Promise<Trip> {
