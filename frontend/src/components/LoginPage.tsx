@@ -3,8 +3,6 @@ import { BusFront } from 'lucide-react'
 import BackButton from './BackButton'
 import { login } from '../services/auth'
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -16,20 +14,12 @@ export default function LoginPage() {
     setError('')
 
     const normalizedEmail = email.trim()
-    if (!normalizedEmail || !password) {
-      setError('Ingresa tu correo electrónico y contraseña.')
-      return
-    }
-    if (!EMAIL_PATTERN.test(normalizedEmail)) {
-      setError('Ingresa un correo electrónico válido.')
-      return
-    }
-
     setLoading(true)
     try {
       const session = await login(normalizedEmail, password)
       sessionStorage.setItem('access_token', session.access)
       sessionStorage.setItem('user_role', session.role)
+      sessionStorage.setItem('session_user', JSON.stringify(session.user))
       window.location.assign(session.role === 'administrador' ? '/admin/' : '/')
     } catch (loginError) {
       setError(

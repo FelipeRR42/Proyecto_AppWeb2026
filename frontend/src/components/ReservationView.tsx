@@ -17,6 +17,7 @@ import {
   type PassengerDetails,
   type Reservation,
 } from '../services/reservations'
+import { getSessionUser } from '../services/auth'
 import type { Trip, TripSeat } from '../types/trip'
 
 type ReservationViewProps = {
@@ -113,16 +114,20 @@ export default function ReservationView({
   onBack,
   onRetry,
 }: ReservationViewProps) {
+  const signedInUser = getSessionUser()
+  const usesSignedInAccount = signedInUser?.role === 'pasajero'
   const [selectedSeats, setSelectedSeats] = useState<number[]>([])
   const [tripType, setTripType] = useState<TripType>('ida')
   const [passenger, setPassenger] = useState<PassengerDetails>({
-    nombre_completo: '',
-    correo_electronico: '',
+    nombre_completo: signedInUser?.nombre_completo ?? '',
+    correo_electronico: signedInUser?.correo_electronico ?? '',
     contrasenia: '',
-    direccion_retorno_predeterminada: '',
-    telefono: '',
+    direccion_retorno_predeterminada: signedInUser?.direccion_retorno_predeterminada ?? '',
+    telefono: signedInUser?.telefono ?? '',
   })
-  const [passengerId, setPassengerId] = useState<string | null>(null)
+  const [passengerId, setPassengerId] = useState<string | null>(
+    usesSignedInAccount ? signedInUser.id : null,
+  )
   const [reservation, setReservation] = useState<Reservation | null>(null)
   const [now, setNow] = useState(Date.now())
   const [submitting, setSubmitting] = useState(false)
@@ -138,9 +143,7 @@ export default function ReservationView({
   const total = seatPrice * selectedSeatCount
   const availableCount = seats.filter((seat) => seatState(seat) === 'available').length
   const sortedSelection = [...selectedSeats].sort((first, second) => first - second)
-  const heldSeats = reservation
-    ? sortedSelection
-    : []
+  const heldSeats = reservation ? sortedSelection : []
   const expiry = reservation ? new Date(reservation.bloqueado_hasta).getTime() : 0
   const secondsRemaining = reservation
     ? Math.max(0, Math.ceil((expiry - now) / 1000))
@@ -429,65 +432,75 @@ export default function ReservationView({
                   </div>
                 ) : (
                   <form className="reservation-form" onSubmit={(event) => void handleReservation(event)}>
-                    <fieldset disabled={Boolean(passengerId) || submitting}>
-                      <legend>Datos del pasajero</legend>
-                      {passengerId && (
-                        <p className="reservation-form-note">
-                          Datos registrados. Puedes volver a intentar el bloqueo con esta cuenta.
-                        </p>
-                      )}
-                      <label>
-                        Nombre completo
-                        <input
-                          autoComplete="name"
-                          required
-                          value={passenger.nombre_completo}
-                          onChange={(event) => updatePassenger('nombre_completo', event.target.value)}
-                        />
-                      </label>
-                      <label>
-                        Correo electrónico
-                        <input
-                          autoComplete="email"
-                          type="email"
-                          required
-                          value={passenger.correo_electronico}
-                          onChange={(event) => updatePassenger('correo_electronico', event.target.value)}
-                        />
-                      </label>
-                      {!passengerId && (
+                    {usesSignedInAccount ? (
+                      <div className="reservation-account-summary">
+                        <strong>Datos de tu cuenta</strong>
+                        <span>{passenger.nombre_completo}</span>
+                        <span>{passenger.correo_electronico}</span>
+                        <span>{passenger.telefono || 'Teléfono no informado'}</span>
+                        <span>{passenger.direccion_retorno_predeterminada || 'Dirección no informada'}</span>
+                      </div>
+                    ) : (
+                      <fieldset disabled={Boolean(passengerId) || submitting}>
+                        <legend>Datos del pasajero</legend>
+                        {passengerId && (
+                          <p className="reservation-form-note">
+                            Datos registrados. Puedes volver a intentar el bloqueo con esta cuenta.
+                          </p>
+                        )}
                         <label>
-                          Contraseña
+                          Nombre completo
                           <input
-                            autoComplete="new-password"
-                            type="password"
-                            minLength={8}
+                            autoComplete="name"
                             required
-                            value={passenger.contrasenia}
-                            onChange={(event) => updatePassenger('contrasenia', event.target.value)}
+                            value={passenger.nombre_completo}
+                            onChange={(event) => updatePassenger('nombre_completo', event.target.value)}
                           />
                         </label>
-                      )}
-                      <label>
-                        Teléfono
-                        <input
-                          autoComplete="tel"
-                          type="tel"
-                          required
-                          value={passenger.telefono}
-                          onChange={(event) => updatePassenger('telefono', event.target.value)}
-                        />
-                      </label>
-                      <label>
-                        Dirección de retorno
-                        <input
-                          autoComplete="street-address"
-                          required
-                          value={passenger.direccion_retorno_predeterminada}
-                          onChange={(event) => updatePassenger('direccion_retorno_predeterminada', event.target.value)}
-                        />
-                      </label>
-                    </fieldset>
+                        <label>
+                          Correo electrónico
+                          <input
+                            autoComplete="email"
+                            type="email"
+                            required
+                            value={passenger.correo_electronico}
+                            onChange={(event) => updatePassenger('correo_electronico', event.target.value)}
+                          />
+                        </label>
+                        {!passengerId && (
+                          <label>
+                            Contraseña
+                            <input
+                              autoComplete="new-password"
+                              type="password"
+                              minLength={8}
+                              required
+                              value={passenger.contrasenia}
+                              onChange={(event) => updatePassenger('contrasenia', event.target.value)}
+                            />
+                          </label>
+                        )}
+                        <label>
+                          Teléfono
+                          <input
+                            autoComplete="tel"
+                            type="tel"
+                            required
+                            value={passenger.telefono}
+                            onChange={(event) => updatePassenger('telefono', event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          Dirección de retorno
+                          <input
+                            autoComplete="street-address"
+                            required
+                            value={passenger.direccion_retorno_predeterminada}
+                            onChange={(event) => updatePassenger('direccion_retorno_predeterminada', event.target.value)}
+                          />
+                        </label>
+                      </fieldset>
+                    )}
                     {actionError && <p className="reservation-action-error" role="alert">{actionError}</p>}
                     {actionMessage && <p className="reservation-action-message" role="status">{actionMessage}</p>}
                     <button
@@ -497,9 +510,11 @@ export default function ReservationView({
                     >
                       {submitting
                         ? 'Bloqueando asientos…'
-                        : passengerId
-                          ? 'Reintentar bloqueo'
-                          : 'Crear cuenta y bloquear'}
+                        : usesSignedInAccount
+                          ? 'Bloquear asientos'
+                          : passengerId
+                            ? 'Reintentar bloqueo'
+                            : 'Crear cuenta y bloquear'}
                     </button>
                     <p className="reservation-api-note">
                       Al confirmar, tus asientos quedan bloqueados por 5 minutos. No se realizará ningún cobro.

@@ -1,7 +1,8 @@
 from datetime import datetime, time, timezone
+import secrets
 
 from bson import ObjectId
-from django.contrib.auth.hashers import make_password
+from django.contrib.auth.hashers import check_password, make_password
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from pymongo.errors import DuplicateKeyError, PyMongoError
 from rest_framework import status
@@ -11,6 +12,7 @@ from rest_framework.views import APIView
 from config.mongo import get_mongo_db
 from .serializers import (
 	AdministradorWriteSerializer,
+	LoginWriteSerializer,
 	PasajeroWriteSerializer,
 	UsuarioReadSerializer,
 	UsuarioWriteSerializer,
@@ -41,6 +43,51 @@ def _correo_duplicado(collection, correo, usuario_id=None):
 	if usuario_id is not None:
 		query['_id'] = {'$ne': usuario_id}
 	return collection.find_one(query) is not None
+
+
+class LoginView(APIView):
+	@extend_schema(
+		operation_id='auth_login',
+		summary='Iniciar sesión',
+		request=LoginWriteSerializer,
+		responses={200: OpenApiResponse(description='Sesión de prueba iniciada.'), 400: ERROR_RESPONSES[400], 401: OpenApiResponse(description='Credenciales incorrectas.'), 500: ERROR_RESPONSES[500]},
+	)
+	def post(self, request):
+		serializer = LoginWriteSerializer(data=request.data)
+		if not serializer.is_valid():
+			return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+		try:
+			values = serializer.validated_data
+			usuario = _usuarios_collection().find_one({
+				'correo_electronico': values['correo_electronico'],
+			})
+			if usuario is None or not check_password(values['contrasenia'], usuario.get('contrasenia', '')):
+				return Response(
+					{'detail': 'El correo electrónico o la contraseña son incorrectos.'},
+					status=status.HTTP_401_UNAUTHORIZED,
+				)
+			if usuario.get('rol') not in ('pasajero', 'administrador'):
+				return Response(
+					{'detail': 'La cuenta no tiene un rol habilitado para iniciar sesión.'},
+					status=status.HTTP_401_UNAUTHORIZED,
+				)
+			perfil_pasajero = usuario.get('perfil_pasajero') or {}
+			return Response({
+				'access': secrets.token_urlsafe(32),
+				'role': usuario['rol'],
+				'user': {
+					'id': str(usuario['_id']),
+					'nombre_completo': usuario.get('nombre_completo', ''),
+					'correo_electronico': usuario.get('correo_electronico', ''),
+					'telefono': perfil_pasajero.get('telefono', ''),
+					'direccion_retorno_predeterminada': perfil_pasajero.get('direccion_retorno_predeterminada', ''),
+				},
+			})
+		except (PyMongoError, ValueError):
+			return _error_servidor()
+		except Exception:
+			return _error_servidor()
 
 
 class UsuarioListCreateView(APIView):

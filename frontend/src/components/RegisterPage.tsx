@@ -3,9 +3,6 @@ import { BusFront } from 'lucide-react'
 import BackButton from './BackButton'
 import { registerPassenger } from '../services/auth'
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-type RegistrationField = 'name' | 'email' | 'phone' | 'address' | 'password'
-
 export default function RegisterPage() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -13,50 +10,19 @@ export default function RegisterPage() {
   const [address, setAddress] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const [errors, setErrors] = useState<Partial<Record<RegistrationField, string>>>({})
   const [formError, setFormError] = useState('')
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setErrors({})
     setFormError('')
-
-    const normalizedName = name.trim()
-    const normalizedEmail = email.trim()
-    const normalizedPhone = phone.trim()
-    const normalizedAddress = address.trim()
-    const validationErrors: Partial<Record<RegistrationField, string>> = {}
-
-    if (!normalizedName) validationErrors.name = 'Ingresa tu nombre completo.'
-    if (!normalizedEmail) {
-      validationErrors.email = 'Ingresa tu correo electrónico.'
-    } else if (!EMAIL_PATTERN.test(normalizedEmail)) {
-      validationErrors.email = 'El correo debe tener un formato válido, por ejemplo nombre@dominio.cl.'
-    }
-    if (!normalizedPhone) validationErrors.phone = 'Ingresa tu teléfono de contacto.'
-    if (!normalizedAddress) {
-      validationErrors.address = 'Ingresa la dirección a la que normalmente regresarás.'
-    } else if (normalizedAddress.length > 200) {
-      validationErrors.address = 'La dirección no puede superar los 200 caracteres.'
-    }
-    if (!password) {
-      validationErrors.password = 'Ingresa una contraseña.'
-    } else if (password.length < 8) {
-      validationErrors.password = 'La contraseña debe tener al menos 8 caracteres.'
-    }
-
-    if (Object.keys(validationErrors).length > 0) {
-      setErrors(validationErrors)
-      return
-    }
 
     setLoading(true)
     try {
       await registerPassenger({
-        name: normalizedName,
-        email: normalizedEmail,
-        phone: normalizedPhone,
-        address: normalizedAddress,
+        name: name.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+        address: address.trim(),
         password,
       })
       window.location.assign('/login?registered=1')
@@ -90,94 +56,57 @@ export default function RegisterPage() {
             <label htmlFor="register-name">Nombre completo</label>
             <input
               autoComplete="name"
-              aria-describedby={errors.name ? 'register-name-error' : undefined}
-              aria-invalid={Boolean(errors.name)}
               id="register-name"
               name="name"
-              onChange={(event) => {
-                setName(event.target.value)
-                setErrors((current) => ({ ...current, name: '' }))
-              }}
+              onChange={(event) => setName(event.target.value)}
               placeholder="Juan Pérez González"
-              required
               type="text"
               value={name}
             />
-            {errors.name && <p className="login-error field-error" id="register-name-error">{errors.name}</p>}
 
             <label htmlFor="register-email">Correo electrónico</label>
             <input
               autoComplete="email"
-              aria-describedby={errors.email ? 'register-email-error' : undefined}
-              aria-invalid={Boolean(errors.email)}
               id="register-email"
               name="email"
-              onChange={(event) => {
-                setEmail(event.target.value)
-                setErrors((current) => ({ ...current, email: '' }))
-              }}
+              onChange={(event) => setEmail(event.target.value)}
               placeholder="juan@correo.com"
-              required
               type="email"
               value={email}
             />
-            {errors.email && <p className="login-error field-error" id="register-email-error">{errors.email}</p>}
 
             <label htmlFor="register-phone">Teléfono</label>
             <input
               autoComplete="tel"
-              aria-describedby={errors.phone ? 'register-phone-error' : undefined}
-              aria-invalid={Boolean(errors.phone)}
               id="register-phone"
               name="phone"
-              onChange={(event) => {
-                setPhone(event.target.value)
-                setErrors((current) => ({ ...current, phone: '' }))
-              }}
+              onChange={(event) => setPhone(event.target.value)}
               placeholder="+56 9 1234 5678"
-              required
               type="tel"
               value={phone}
             />
-            {errors.phone && <p className="login-error field-error" id="register-phone-error">{errors.phone}</p>}
 
             <label htmlFor="register-address">Dirección de retorno predeterminada</label>
             <input
               autoComplete="street-address"
-              aria-describedby={errors.address ? 'register-address-error' : undefined}
-              aria-invalid={Boolean(errors.address)}
               id="register-address"
-              maxLength={200}
               name="address"
-              onChange={(event) => {
-                setAddress(event.target.value)
-                setErrors((current) => ({ ...current, address: '' }))
-              }}
+              onChange={(event) => setAddress(event.target.value)}
               placeholder="Av. Principal 123, Ovalle"
-              required
               type="text"
               value={address}
             />
-            {errors.address && <p className="login-error field-error" id="register-address-error">{errors.address}</p>}
 
             <label htmlFor="register-password">Contraseña</label>
             <input
               autoComplete="new-password"
-              aria-describedby={errors.password ? 'register-password-error' : undefined}
-              aria-invalid={Boolean(errors.password)}
               id="register-password"
-              minLength={8}
               name="password"
-              onChange={(event) => {
-                setPassword(event.target.value)
-                setErrors((current) => ({ ...current, password: '' }))
-              }}
-              placeholder="Mínimo 8 caracteres"
-              required
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Contraseña"
               type="password"
               value={password}
             />
-            {errors.password && <p className="login-error field-error" id="register-password-error">{errors.password}</p>}
 
             {formError && (
               <p className="login-error" role="alert">
