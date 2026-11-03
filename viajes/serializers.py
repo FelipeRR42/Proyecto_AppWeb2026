@@ -32,6 +32,12 @@ class ViajeWriteSerializer(serializers.Serializer):
         return attrs
 
 
+class AsientoReadSerializer(serializers.Serializer):
+    num_asiento = serializers.IntegerField()
+    estado = serializers.CharField()
+    bloqueado_hasta = serializers.DateTimeField(required=False, allow_null=True)
+
+
 class ViajeReadSerializer(serializers.Serializer):
     id = serializers.SerializerMethodField()
     titulo = serializers.CharField()
@@ -49,7 +55,7 @@ class ViajeReadSerializer(serializers.Serializer):
     administrador_id = serializers.SerializerMethodField()
     administrador_nombre = serializers.SerializerMethodField()
     vehiculo_id = serializers.SerializerMethodField()
-    asientos = serializers.JSONField(required=False)
+    asientos = AsientoReadSerializer(many=True, required=False)
 
     def get_id(self, viaje) -> str:
         return str(viaje['_id'])
