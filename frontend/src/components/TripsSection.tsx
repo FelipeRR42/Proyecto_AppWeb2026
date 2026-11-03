@@ -4,6 +4,11 @@ import TripCard from './TripCard'
 import { getUpcomingTrips } from '../services/trips'
 import type { Trip, TripFilters } from '../types/trip'
 
+type TripsSectionProps = {
+  onChooseSeat: (tripId: string) => void
+  reloadKey: number
+}
+
 const EMPTY_FILTERS: TripFilters = {
   fecha: '',
   origen: '',
@@ -14,7 +19,7 @@ const EMPTY_FILTERS: TripFilters = {
   orden: 'fecha',
 }
 
-export default function TripsSection() {
+export default function TripsSection({ onChooseSeat, reloadKey }: TripsSectionProps) {
   const [draftFilters, setDraftFilters] = useState<TripFilters>(EMPTY_FILTERS)
   const [filters, setFilters] = useState<TripFilters>(EMPTY_FILTERS)
   const [trips, setTrips] = useState<Trip[]>([])
@@ -73,7 +78,7 @@ export default function TripsSection() {
 
     void loadTrips()
     return () => controller.abort()
-  }, [filters, requestKey])
+  }, [filters, requestKey, reloadKey])
 
   const activeFilterCount = useMemo(
     () =>
@@ -282,6 +287,8 @@ export default function TripsSection() {
               <TripCard
                 key={trip.id}
                 trip={trip}
+                onChooseSeat={onChooseSeat}
+                layout="horizontal"
               />
             ))}
           </div>

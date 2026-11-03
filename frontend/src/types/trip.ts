@@ -1,6 +1,7 @@
 export type TripSeat = {
   num_asiento: number
   estado: string
+  bloqueado_hasta?: string | null
 }
 
 export type Trip = {
