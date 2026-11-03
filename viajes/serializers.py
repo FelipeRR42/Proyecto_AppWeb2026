@@ -32,6 +32,35 @@ class ViajeWriteSerializer(serializers.Serializer):
         return attrs
 
 
+class ViajeQuerySerializer(serializers.Serializer):
+    estado = serializers.ChoiceField(choices=ESTADOS_VIAJE, required=False)
+    origen = serializers.CharField(max_length=100, required=False)
+    destino = serializers.CharField(max_length=100, required=False)
+    artista = serializers.CharField(max_length=100, required=False)
+    fecha_desde = serializers.DateField(
+        input_formats=('%Y-%m-%d',),
+        required=False,
+    )
+    precio_minimo = serializers.IntegerField(min_value=0, required=False)
+    precio_maximo = serializers.IntegerField(min_value=0, required=False)
+    cupos_minimos = serializers.IntegerField(min_value=0, required=False)
+    orden = serializers.ChoiceField(
+        choices=('fecha', 'precio_asc', 'precio_desc'),
+        required=False,
+        default='fecha',
+    )
+    proximos = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, attrs):
+        minimum = attrs.get('precio_minimo')
+        maximum = attrs.get('precio_maximo')
+        if minimum is not None and maximum is not None and maximum < minimum:
+            raise serializers.ValidationError({
+                'precio_maximo': 'Debe ser mayor o igual al precio mínimo.',
+            })
+        return attrs
+
+
 class AsientoReadSerializer(serializers.Serializer):
     num_asiento = serializers.IntegerField()
     estado = serializers.CharField()

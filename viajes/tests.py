@@ -76,6 +76,70 @@ class ViajeApiTests(SimpleTestCase):
 		self.assertEqual(response.data[0]['id'], str(self.viaje_id))
 
 	@patch('viajes.views.get_mongo_db')
+	def test_filtros_de_busqueda_se_aplican_en_mongo(self, get_mongo_db):
+		self.collection.find.return_value.sort.return_value = [self.viaje]
+		get_mongo_db.return_value = self.database
+
+		response = self.client.get(
+			'/api/viajes/?proximos=true&fecha_desde=2026-12-10'
+			'&origen=Ciudad%20A&artista=Banda&precio_minimo=9000'
+			'&precio_maximo=12000&cupos_minimos=2&orden=precio_asc',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		query = self.collection.find.call_args.args[0]
+		self.assertEqual(query['origen'], 'Ciudad A')
+		self.assertEqual(query['artista'], 'Banda')
+		self.assertEqual(query['precio_ida'], {'$gte': 9000, '$lte': 12000})
+		conditions = query['$and']
+		self.assertIn(
+			{'estado': {'$in': ('programado', 'lleno')}},
+			conditions,
+		)
+		event_date_filter = next(
+			item['fecha_evento']
+			for item in conditions
+			if 'fecha_evento' in item
+		)
+		self.assertEqual(
+			event_date_filter['$gte'],
+			datetime(
+				2026, 12, 10, 3, tzinfo=timezone.utc,
+			),
+		)
+		seat_filter = next(item['$expr'] for item in conditions if '$expr' in item)
+		self.assertEqual(seat_filter['$gte'][1], 2)
+		self.assertEqual(
+			seat_filter['$gte'][0]['$size']['$filter']['cond'],
+			{'$eq': ['$$asiento.estado', 'disponible']},
+		)
+		self.collection.find.return_value.sort.assert_called_once_with(
+			'precio_ida',
+			1,
+		)
+
+	@patch('viajes.views.get_mongo_db')
+	def test_filtros_invalidos_devuelven_400_sin_consultar_mongo(self, get_mongo_db):
+		response = self.client.get(
+			'/api/viajes/?precio_minimo=12000&precio_maximo=9000',
+		)
+
+		self.assertEqual(response.status_code, 400)
+		self.assertIn('precio_maximo', response.data)
+		get_mongo_db.assert_not_called()
+
+	@patch('viajes.views.get_mongo_db')
+	def test_fecha_y_orden_invalidos_devuelven_400(self, get_mongo_db):
+		invalid_date = self.client.get('/api/viajes/?fecha_desde=10-12-2026')
+		invalid_order = self.client.get('/api/viajes/?orden=aleatorio')
+
+		self.assertEqual(invalid_date.status_code, 400)
+		self.assertIn('fecha_desde', invalid_date.data)
+		self.assertEqual(invalid_order.status_code, 400)
+		self.assertIn('orden', invalid_order.data)
+		get_mongo_db.assert_not_called()
+
+	@patch('viajes.views.get_mongo_db')
 	def test_listar_viajes_serializa_asientos_bloqueados_sin_id_interno(self, get_mongo_db):
 		reserva_id = ObjectId()
 		viaje = {
