@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { BusFront } from 'lucide-react'
+import BackButton from './BackButton'
 import { login } from '../services/auth'
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -44,6 +45,7 @@ export default function LoginPage() {
   return (
     <main className="login-page">
       <div className="login-content">
+        <BackButton />
         <a className="login-brand" href="/" aria-label="MiTransporte, inicio">
           <span className="login-brand-icon">
             <BusFront size={21} strokeWidth={2.2} aria-hidden="true" />

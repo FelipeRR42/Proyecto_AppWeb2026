@@ -1,4 +1,5 @@
 import { BusFront } from 'lucide-react'
+import BackButton from './BackButton'
 
 export default function SiteHeader() {
   const isSearchPage = window.location.pathname.replace(/\/+$/, '') === '/viajes'
@@ -14,9 +15,7 @@ export default function SiteHeader() {
 
       <nav className="header-actions" aria-label="Cuenta">
         <span className="header-route">Ovalle <span aria-hidden="true">→</span> Santiago</span>
-        <a className="account-button" href={isSearchPage ? '/' : '/viajes'}>
-          {isSearchPage ? 'Inicio' : 'Explorar'}
-        </a>
+        {isSearchPage && <BackButton />}
         <a className="account-button" href="/login">
           Ingresar
         </a>
