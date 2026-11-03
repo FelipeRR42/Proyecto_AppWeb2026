@@ -20,6 +20,16 @@ export type Trip = {
   asientos?: TripSeat[]
 }
 
+export type TripFilters = {
+  fecha: string
+  origen: string
+  artista: string
+  precioMinimo: string
+  precioMaximo: string
+  cuposMinimos: string
+  orden: 'fecha' | 'precio_asc' | 'precio_desc'
+}
+
 export function isTrip(value: unknown): value is Trip {
   if (typeof value !== 'object' || value === null) return false
 
