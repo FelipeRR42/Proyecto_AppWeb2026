@@ -1,43 +1,38 @@
 from django.db import models
+from django.conf import settings
 
 # Create your models here.
 class Usuario(models.Model):
-    id_usuario = models.AutoField(primary_key=True)
-    nombre_completo = models.CharField(max_length=200)
-    correo_electronico = models.EmailField(unique=True)
-    contrasenia = models.CharField(max_length=128)  # se guarda hasheada, nunca en texto plano
+    class Rol(models.TextChoices):
+        PASAJERO = 'pasajero', 'Pasajero'
+        ADMINISTRADOR = 'administrador', 'Administrador'
 
+    cuenta = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete = models.CASCADE,
+        related_name = 'perfil',
+        null=True,
+        blank=True,
+    )
+    nombre_completo = models.CharField(max_length=200)
+    rol = models.CharField(
+        max_length=20,
+        choices=Rol.choices,
+        default=Rol.PASAJERO,
+    )
+    telefono = models.CharField(max_length = 20, blank = True, default = '')
+    direccion_retorno = models.CharField(
+        max_length = 200, blank = True, default = ''
+    )
+    fecha_contratacion = models.DateField( null = True, blank = True)
+    telefono_corporativo = models.CharField( max_length = 20, blank = True, default='')
     class Meta:
         db_table = 'Usuario'
 
     def __str__(self):
         return self.nombre_completo
 
-
-class Pasajero(Usuario):
-    id_pasajero = models.OneToOneField(Usuario, on_delete=models.CASCADE, primary_key=True, parent_link=True)
-    direccion_retorno_predeterminada = models.CharField(max_length=200)
-    telefono = models.CharField(max_length=20)
-
-    class Meta:
-        db_table = 'Pasajero'
-
-    def __str__(self):
-        return self.nombre_completo
-
-
-class Administrador(Usuario):
-    id_admin = models.OneToOneField(Usuario, on_delete=models.CASCADE, primary_key=True, parent_link=True)
-    fecha_contratacion = models.DateField()
-    telefono_corporativo = models.CharField(max_length=20)
-
-    class Meta:
-        db_table = 'Administrador'
-
-    def __str__(self):
-        return self.nombre_completo
-
-
+"""
 class Notificacion(models.Model):
     id_notificacion = models.AutoField(primary_key=True)
     id_admin = models.ForeignKey(Administrador, on_delete=models.CASCADE, db_column='id_admin')
@@ -63,3 +58,4 @@ class PasajeroRecibeNotificacion(models.Model):
 
     def __str__(self):
         return f"{self.pasajero} ← {self.notificacion}"
+"""
