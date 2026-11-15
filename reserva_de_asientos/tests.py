@@ -15,9 +15,12 @@ class ReservaApiTests(SimpleTestCase):
         self.client.force_authenticate(user=SimpleNamespace(
             pk=self.account_id,
             is_authenticated=True,
-            perfil=SimpleNamespace(rol='pasajero'),
+            perfil=SimpleNamespace(
+                rol='pasajero',
+                nombre_completo='Pasajero de prueba',
+            ),
         ))
-        self.pasajero_id = ObjectId()
+        self.pasajero_id = str(self.account_id)
         self.viaje_id = ObjectId()
         self.reserva_id = ObjectId()
         self.viaje = {
@@ -68,6 +71,36 @@ class ReservaApiTests(SimpleTestCase):
         self.assertEqual(respuesta.data[0]['id_reserva'], str(self.reserva_id))
         self.assertEqual(respuesta.data[0]['id_pasajero'], str(self.pasajero_id))
         self.assertEqual(respuesta.data[0]['id_viaje'], str(self.viaje_id))
+        self.reservas.find.assert_called_once_with({
+            'pasajero_titular.id_pasajero': str(self.account_id),
+        })
+
+    @patch('reserva_de_asientos.views.get_mongo_db')
+    def test_pasajero_no_puede_consultar_reserva_de_otra_cuenta(self, get_mongo_db):
+        self.reservas.find_one.return_value = {
+            **self.reserva,
+            'pasajero_titular': {'id_pasajero': '999'},
+        }
+        get_mongo_db.return_value = self.db
+
+        respuesta = self.client.get(f'/api/reservas/{self.reserva_id}/')
+
+        self.assertEqual(respuesta.status_code, 404)
+
+    @patch('reserva_de_asientos.views.get_mongo_db')
+    def test_administrador_puede_listar_todas_las_reservas(self, get_mongo_db):
+        self.client.force_authenticate(user=SimpleNamespace(
+            pk=7,
+            is_authenticated=True,
+            perfil=SimpleNamespace(rol='administrador'),
+        ))
+        self.reservas.find.return_value = [self.reserva]
+        get_mongo_db.return_value = self.db
+
+        respuesta = self.client.get(self.list_url)
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.reservas.find.assert_called_once_with({})
 
     @patch('reserva_de_asientos.views.get_mongo_db')
     def test_crear_guarda_reserva_en_mongo(self, get_mongo_db):
@@ -112,7 +145,7 @@ class ReservaApiTests(SimpleTestCase):
         self.reservas.insert_one.assert_called_once()
 
     @patch('reserva_de_asientos.views.get_mongo_db')
-    def test_crud_consultar_actualizar_y_eliminar(self, get_mongo_db):
+    def test_crud_consultar_actualizar_y_cancelar_sin_borrar_historial(self, get_mongo_db):
         self.reservas.find_one.side_effect = [
             self.reserva,
             self.reserva,
@@ -145,7 +178,14 @@ class ReservaApiTests(SimpleTestCase):
         self.assertEqual(actualizar.data['direccion_retorno'], 'Nueva dirección')
         self.assertEqual(reemplazar.status_code, 200)
         self.assertEqual(eliminar.status_code, 204)
-        self.reservas.delete_one.assert_called_once_with({'_id': self.reserva_id})
+        self.reservas.delete_one.assert_not_called()
+        self.assertEqual(
+            self.reservas.update_one.call_args.args,
+            (
+                {'_id': self.reserva_id, 'estado': 'pendiente'},
+                {'$set': {'estado': 'cancelada'}},
+            ),
+        )
 
     @patch('reserva_de_asientos.views.get_mongo_db')
     def test_identificador_invalido_devuelve_400(self, get_mongo_db):
@@ -331,9 +371,17 @@ class LiberarBloqueosTests(SimpleTestCase):
     def test_limpia_asientos_y_reservas_vencidas(self):
         db = SimpleNamespace(viajes=MagicMock(), reservas=MagicMock())
         ahora = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+        actualizaciones = []
+        db.reservas.update_many.side_effect = lambda *args, **kwargs: actualizaciones.append(
+            'reservas'
+        )
+        db.viajes.update_many.side_effect = lambda *args, **kwargs: actualizaciones.append(
+            'viajes'
+        )
 
         liberar_bloqueos_vencidos(db, ahora=ahora)
 
+        self.assertEqual(actualizaciones, ['reservas', 'viajes'])
         viajes_query, viajes_update = db.viajes.update_many.call_args.args
         self.assertEqual(
             viajes_query['asientos']['$elemMatch']['bloqueado_hasta']['$lte'],

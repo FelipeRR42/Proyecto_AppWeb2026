@@ -9,7 +9,7 @@ class Usuario(models.Model):
 
     cuenta = models.OneToOneField(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='perfil',
         primary_key=True,
     )

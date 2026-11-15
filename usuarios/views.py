@@ -18,6 +18,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from config.mongo import get_mongo_db
 from .models import Usuario
+from .permissions import IsAppAdministrator
 from .serializers import (
 	AdministradorWriteSerializer,
 	LoginWriteSerializer,
@@ -142,7 +143,7 @@ class RegistroView(APIView):
 			return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 		values = serializer.validated_data
-		email = values['correo_electronico'].casefold()
+		email = values['correo_electronico'].lower()
 		user_model = get_user_model()
 		if user_model.objects.filter(email__iexact=email).exists():
 			return Response(
@@ -199,6 +200,8 @@ class RegistroView(APIView):
 
 
 class UsuarioListCreateView(APIView):
+	permission_classes = [IsAppAdministrator]
+
 	@extend_schema(
 		operation_id='usuarios_listar',
 		summary='Listar usuarios',
@@ -263,6 +266,8 @@ class UsuarioListCreateView(APIView):
 
 
 class UsuarioDetailView(APIView):
+	permission_classes = [IsAppAdministrator]
+
 	@extend_schema(
 		operation_id='usuarios_obtener',
 		summary='Obtener usuario',
@@ -338,8 +343,11 @@ class UsuarioDetailView(APIView):
 		if not ObjectId.is_valid(usuario_id):
 			return Response({'detail': 'Identificador inválido.'}, status=status.HTTP_400_BAD_REQUEST)
 		try:
-			result = _usuarios_collection().delete_one({'_id': ObjectId(usuario_id)})
-			if result.deleted_count == 0:
+			result = _usuarios_collection().update_one(
+				{'_id': ObjectId(usuario_id)},
+				{'$set': {'archivado': True}},
+			)
+			if result.matched_count == 0:
 				return Response({'detail': 'Usuario no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
 			return Response(status=status.HTTP_204_NO_CONTENT)
 		except Exception:
@@ -347,6 +355,8 @@ class UsuarioDetailView(APIView):
 
 
 class PerfilUsuarioListCreateView(APIView):
+	permission_classes = [IsAppAdministrator]
+
 	tipo_rol = None
 	perfil_key = None
 	serializer_class = None
@@ -415,6 +425,8 @@ class PerfilUsuarioListCreateView(APIView):
 
 
 class PerfilUsuarioDetailView(APIView):
+	permission_classes = [IsAppAdministrator]
+
 	tipo_rol = None
 	perfil_key = None
 	serializer_class = None
@@ -525,11 +537,14 @@ class PerfilUsuarioDetailView(APIView):
 		if not ObjectId.is_valid(usuario_id):
 			return Response({'detail': 'Identificador inválido.'}, status=status.HTTP_400_BAD_REQUEST)
 		try:
-			result = _usuarios_collection().delete_one({
-				'_id': ObjectId(usuario_id),
-				'rol': self.tipo_rol,
-			})
-			if result.deleted_count == 0:
+			result = _usuarios_collection().update_one(
+				{
+					'_id': ObjectId(usuario_id),
+					'rol': self.tipo_rol,
+				},
+				{'$set': {'archivado': True}},
+			)
+			if result.matched_count == 0:
 				return Response({'detail': 'Perfil no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
 			return Response(status=status.HTTP_204_NO_CONTENT)
 		except Exception:

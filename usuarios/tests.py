@@ -12,6 +12,11 @@ from django.contrib.auth.hashers import make_password
 class UsuarioApiTests(SimpleTestCase):
 	def setUp(self):
 		self.client = APIClient()
+		self.client.force_authenticate(user=SimpleNamespace(
+			pk=7,
+			is_authenticated=True,
+			perfil=SimpleNamespace(rol='administrador'),
+		))
 		self.usuario_id = ObjectId()
 		self.usuario = {
 			'_id': self.usuario_id,
@@ -24,6 +29,17 @@ class UsuarioApiTests(SimpleTestCase):
 		}
 		self.collection = MagicMock()
 		self.database = SimpleNamespace(usuarios=self.collection)
+
+	def test_pasajero_no_puede_administrar_usuarios_legacy(self):
+		self.client.force_authenticate(user=SimpleNamespace(
+			pk=8,
+			is_authenticated=True,
+			perfil=SimpleNamespace(rol='pasajero'),
+		))
+
+		response = self.client.get('/api/usuarios/')
+
+		self.assertEqual(response.status_code, 403)
 
 	@patch('usuarios.views.get_mongo_db')
 	def test_lista_usuarios_devuelve_200_sin_contrasenias(self, get_mongo_db):
@@ -93,8 +109,10 @@ class UsuarioApiTests(SimpleTestCase):
 	@patch('usuarios.views.get_mongo_db')
 	def test_actualizar_y_eliminar_usuario(self, get_mongo_db):
 		self.collection.find_one.side_effect = [self.usuario, {**self.usuario, 'nombre_completo': 'Ana Nueva'}]
-		self.collection.update_one.return_value = SimpleNamespace(modified_count=1)
-		self.collection.delete_one.return_value = SimpleNamespace(deleted_count=1)
+		self.collection.update_one.return_value = SimpleNamespace(
+			modified_count=1,
+			matched_count=1,
+		)
 		get_mongo_db.return_value = self.database
 
 		update_response = self.client.patch(
@@ -106,6 +124,11 @@ class UsuarioApiTests(SimpleTestCase):
 
 		self.assertEqual(update_response.status_code, 200)
 		self.assertEqual(delete_response.status_code, 204)
+		self.collection.update_one.assert_called_with(
+			{'_id': self.usuario_id},
+			{'$set': {'archivado': True}},
+		)
+		self.collection.delete_one.assert_not_called()
 
 	@patch('usuarios.views.get_mongo_db')
 	def test_crear_pasajero_guarda_perfil_anidado(self, get_mongo_db):
@@ -182,6 +205,32 @@ class UsuarioApiTests(SimpleTestCase):
 		self.assertIsNone(documento['perfil_pasajero'])
 
 	@patch('usuarios.views.get_mongo_db')
+	def test_crear_administrador_sin_telefono_corporativo(self, get_mongo_db):
+		administrador = {
+			**self.usuario,
+			'rol': 'administrador',
+			'perfil_pasajero': None,
+			'perfil_admin': {
+				'fecha_contratacion': datetime(2026, 1, 15, tzinfo=timezone.utc),
+				'telefono_corporativo': '',
+			},
+		}
+		self.collection.find_one.side_effect = [None, administrador]
+		self.collection.insert_one.return_value = SimpleNamespace(inserted_id=self.usuario_id)
+		get_mongo_db.return_value = self.database
+
+		response = self.client.post('/api/administradores/', {
+			'nombre_completo': 'Ana Pérez',
+			'correo_electronico': 'ana@example.com',
+			'contrasenia': 'clave-segura-123',
+			'fecha_contratacion': '2026-01-15',
+		}, format='json')
+
+		self.assertEqual(response.status_code, 201)
+		documento = self.collection.insert_one.call_args.args[0]
+		self.assertEqual(documento['perfil_admin']['telefono_corporativo'], '')
+
+	@patch('usuarios.views.get_mongo_db')
 	def test_listar_pasajeros_filtra_por_rol(self, get_mongo_db):
 		self.collection.find.return_value = [self.usuario]
 		get_mongo_db.return_value = self.database
@@ -208,7 +257,10 @@ class UsuarioApiTests(SimpleTestCase):
 			'perfil_pasajero': {'telefono': '5550000'},
 		}
 		self.collection.find_one.side_effect = [pasajero, pasajero]
-		self.collection.delete_one.return_value = SimpleNamespace(deleted_count=1)
+		self.collection.update_one.return_value = SimpleNamespace(
+			modified_count=1,
+			matched_count=1,
+		)
 		get_mongo_db.return_value = self.database
 
 		update_response = self.client.patch(
@@ -220,11 +272,15 @@ class UsuarioApiTests(SimpleTestCase):
 
 		self.assertEqual(update_response.status_code, 200)
 		self.assertEqual(delete_response.status_code, 204)
-		self.collection.update_one.assert_called_once_with(
+		self.collection.update_one.assert_any_call(
 			{'_id': self.usuario_id, 'rol': 'pasajero'},
 			{'$set': {'perfil_pasajero.telefono': '5550001'}},
 		)
-		self.collection.delete_one.assert_called_once_with({'_id': self.usuario_id, 'rol': 'pasajero'})
+		self.collection.update_one.assert_any_call(
+			{'_id': self.usuario_id, 'rol': 'pasajero'},
+			{'$set': {'archivado': True}},
+		)
+		self.collection.delete_one.assert_not_called()
 
 	@patch('usuarios.views.get_mongo_db')
 	def test_actualizar_y_eliminar_administrador_filtra_por_rol(self, get_mongo_db):
@@ -238,7 +294,10 @@ class UsuarioApiTests(SimpleTestCase):
 			},
 		}
 		self.collection.find_one.side_effect = [administrador, administrador]
-		self.collection.delete_one.return_value = SimpleNamespace(deleted_count=1)
+		self.collection.update_one.return_value = SimpleNamespace(
+			modified_count=1,
+			matched_count=1,
+		)
 		get_mongo_db.return_value = self.database
 
 		update_response = self.client.patch(
@@ -250,8 +309,12 @@ class UsuarioApiTests(SimpleTestCase):
 
 		self.assertEqual(update_response.status_code, 200)
 		self.assertEqual(delete_response.status_code, 204)
-		self.collection.update_one.assert_called_once_with(
+		self.collection.update_one.assert_any_call(
 			{'_id': self.usuario_id, 'rol': 'administrador'},
 			{'$set': {'perfil_admin.telefono_corporativo': '5550001'}},
 		)
-		self.collection.delete_one.assert_called_once_with({'_id': self.usuario_id, 'rol': 'administrador'})
+		self.collection.update_one.assert_any_call(
+			{'_id': self.usuario_id, 'rol': 'administrador'},
+			{'$set': {'archivado': True}},
+		)
+		self.collection.delete_one.assert_not_called()

@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password
+from django.db import IntegrityError, transaction
+from django.db.models.deletion import ProtectedError
 from django.test import TestCase
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
@@ -94,6 +96,33 @@ class AuthenticationApiTests(TestCase):
         }, format='json')
 
         self.assertEqual(response.status_code, 409)
+
+    def test_database_rejects_case_insensitive_duplicate_emails(self):
+        user_model = get_user_model()
+        user_model.objects.create_user(
+            username='first-account',
+            email='same@example.test',
+            password='Clave-segura-2026!',
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                user_model.objects.create_user(
+                    username='second-account',
+                    email='SAME@example.test',
+                    password='Clave-segura-2026!',
+                )
+
+    def test_account_cannot_be_deleted_while_profile_exists(self):
+        account = get_user_model().objects.create_user(
+            username='protected-account',
+            email='protected@example.test',
+            password='Clave-segura-2026!',
+        )
+        Usuario.objects.create(cuenta=account, nombre_completo='Cuenta protegida')
+
+        with self.assertRaises(ProtectedError):
+            account.delete()
 
     def test_registration_supports_long_emails_with_unique_django_username(self):
         email = f"{'a' * 145}@example.test"

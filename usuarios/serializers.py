@@ -37,6 +37,7 @@ class UsuarioReadSerializer(serializers.Serializer):
     rol = serializers.CharField(required=False)
     perfil_pasajero = serializers.JSONField(required=False, allow_null=True)
     perfil_admin = serializers.JSONField(required=False, allow_null=True)
+    archivado = serializers.BooleanField(required=False, default=False)
 
     def get_id(self, usuario) -> str:
         return str(usuario['_id'])
@@ -55,7 +56,12 @@ class PasajeroWriteSerializer(PerfilUsuarioWriteSerializer):
 
 class AdministradorWriteSerializer(PerfilUsuarioWriteSerializer):
     fecha_contratacion = serializers.DateField()
-    telefono_corporativo = serializers.CharField(max_length=20)
+    telefono_corporativo = serializers.CharField(
+        max_length=20,
+        required=False,
+        allow_blank=True,
+        default='',
+    )
 
 
 class LoginWriteSerializer(serializers.Serializer):

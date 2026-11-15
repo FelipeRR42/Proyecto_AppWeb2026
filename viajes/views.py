@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 
 from config.mongo import get_mongo_db
 from reserva_de_asientos.services import liberar_bloqueos_vencidos
+from usuarios.permissions import IsAppAdministrator
 from .serializers import ViajeQuerySerializer, ViajeReadSerializer, ViajeWriteSerializer
 
 
@@ -45,10 +46,7 @@ def _crear_documento(values, administrador, vehiculo, asientos=None):
 		'precio_ida': values['precio_ida'],
 		'precio_ida_y_vuelta': values['precio_ida_y_vuelta'],
 		'estado': values['estado'],
-		'administrador': {
-			'id_admin': administrador['_id'],
-			'nombre': administrador['nombre_completo'],
-		},
+		'administrador': administrador,
 		'patente_vehiculo': vehiculo['_id'],
 		'asientos': asientos if asientos is not None else [
 			{'num_asiento': number, 'estado': 'disponible', 'bloqueado_hasta': None}
@@ -58,23 +56,10 @@ def _crear_documento(values, administrador, vehiculo, asientos=None):
 
 
 def _resolver_referencias(db, values):
-	administrador_id = values.pop('administrador_id')
-	if not ObjectId.is_valid(administrador_id):
-		return None, None, Response(
-			{'administrador_id': ['Debe ser un ObjectId válido.']},
-			status=status.HTTP_400_BAD_REQUEST,
-		)
-	administrador = db.usuarios.find_one({
-		'_id': ObjectId(administrador_id),
-		'rol': 'administrador',
-	})
-	if administrador is None:
-		return None, None, Response({'detail': 'Administrador no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
-
 	vehiculo = db.vehiculos.find_one({'patente': values.pop('patente_vehiculo')})
 	if vehiculo is None:
-		return None, None, Response({'detail': 'Vehículo no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
-	return administrador, vehiculo, None
+		return None, Response({'detail': 'Vehículo no encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+	return vehiculo, None
 
 
 def _construir_consulta_viajes(filters):
@@ -145,7 +130,7 @@ class PublicReadAPIView(APIView):
 	def get_permissions(self):
 		if self.request.method in SAFE_METHODS:
 			return [AllowAny()]
-		return super().get_permissions()
+		return [IsAppAdministrator()]
 
 
 class ViajeListCreateView(PublicReadAPIView):
@@ -211,9 +196,15 @@ class ViajeListCreateView(PublicReadAPIView):
 		try:
 			db = get_mongo_db()
 			values = dict(serializer.validated_data)
-			administrador, vehiculo, error = _resolver_referencias(db, values)
+			values.pop('administrador_id', None)
+			vehiculo, error = _resolver_referencias(db, values)
 			if error:
 				return error
+			profile = request.user.perfil
+			administrador = {
+				'id_admin': str(request.user.pk),
+				'nombre': profile.nombre_completo,
+			}
 			documento = _crear_documento(values, administrador, vehiculo)
 			result = db.viajes.insert_one(documento)
 			viaje = db.viajes.find_one({'_id': result.inserted_id})
@@ -297,9 +288,14 @@ class ViajeDetailView(PublicReadAPIView):
 			if not serializer.is_valid():
 				return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 			values = dict(serializer.validated_data)
-			administrador, vehiculo, error = _resolver_referencias(get_mongo_db(), values)
+			values.pop('administrador_id', None)
+			vehiculo, error = _resolver_referencias(get_mongo_db(), values)
 			if error:
 				return error
+			administrador = viaje_actual.get('administrador') or {
+				'id_admin': str(request.user.pk),
+				'nombre': request.user.perfil.nombre_completo,
+			}
 			documento = _crear_documento(values, administrador, vehiculo, viaje_actual.get('asientos', []))
 			collection.update_one({'_id': object_id}, {'$set': documento})
 			viaje = collection.find_one({'_id': object_id})

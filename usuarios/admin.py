@@ -17,3 +17,6 @@ class UsuarioAdmin(admin.ModelAdmin):
         'cuenta__username',
         'cuenta__email',
     )
+
+    def has_delete_permission(self, request, obj=None):
+        return False
