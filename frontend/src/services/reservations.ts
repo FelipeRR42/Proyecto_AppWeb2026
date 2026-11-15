@@ -1,4 +1,5 @@
 import { API_URL } from './trips'
+import { clearSession, refreshAccessToken } from './auth'
 
 export type PassengerDetails = {
   nombre_completo: string
@@ -12,6 +13,38 @@ export type Reservation = {
   id_reserva: string
   estado: string
   bloqueado_hasta: string
+}
+
+async function authenticatedFetch(path: string, init: RequestInit): Promise<Response> {
+  const send = (accessToken: string) => {
+    const headers = new Headers(init.headers)
+    headers.set('Authorization', `Bearer ${accessToken}`)
+    return fetch(`${API_URL}${path}`, { ...init, headers })
+  }
+
+  let accessToken = sessionStorage.getItem('access_token')
+  if (!accessToken) {
+    accessToken = await refreshAccessToken()
+  }
+  if (!accessToken) {
+    throw new Error('Debes iniciar sesión para continuar.')
+  }
+
+  let response = await send(accessToken)
+  if (response.status !== 401) return response
+
+  accessToken = await refreshAccessToken()
+  if (!accessToken) {
+    clearSession()
+    throw new Error('Tu sesión venció o ya no es válida. Inicia sesión nuevamente.')
+  }
+
+  response = await send(accessToken)
+  if (response.status === 401) {
+    clearSession()
+    throw new Error('Tu sesión venció o ya no es válida. Inicia sesión nuevamente.')
+  }
+  return response
 }
 
 async function getErrorMessage(response: Response): Promise<string> {
@@ -35,7 +68,7 @@ async function getErrorMessage(response: Response): Promise<string> {
 }
 
 async function postJson(path: string, payload: unknown): Promise<unknown> {
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await authenticatedFetch(path, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
@@ -51,22 +84,7 @@ async function postJson(path: string, payload: unknown): Promise<unknown> {
   return response.json() as Promise<unknown>
 }
 
-export async function createPassenger(details: PassengerDetails): Promise<string> {
-  const response = await postJson('/pasajeros/', details)
-  if (
-    typeof response !== 'object' ||
-    response === null ||
-    !('id' in response) ||
-    typeof response.id !== 'string' ||
-    response.id.length === 0
-  ) {
-    throw new Error('La API no devolvió el identificador del pasajero.')
-  }
-  return response.id
-}
-
 export async function createReservation(payload: {
-  id_pasajero: string
   id_viaje: string
   tipo_viaje: 'ida' | 'ida_vuelta'
   asientos: number[]
@@ -96,8 +114,8 @@ export async function createReservation(payload: {
 }
 
 export async function cancelReservation(reservationId: string): Promise<void> {
-  const response = await fetch(
-    `${API_URL}/reservas/${encodeURIComponent(reservationId)}/cancelar/`,
+  const response = await authenticatedFetch(
+    `/reservas/${encodeURIComponent(reservationId)}/cancelar/`,
     {
       method: 'POST',
       headers: { Accept: 'application/json' },

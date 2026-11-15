@@ -5,6 +5,7 @@ from bson import ObjectId
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, OpenApiTypes, extend_schema
 from pymongo.errors import PyMongoError
 from rest_framework import status
+from rest_framework.permissions import AllowAny, SAFE_METHODS
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -140,7 +141,14 @@ def _construir_consulta_viajes(filters):
 	return query, ordering.get(filters.get('orden'), ('fecha_salida', 1))
 
 
-class ViajeListCreateView(APIView):
+class PublicReadAPIView(APIView):
+	def get_permissions(self):
+		if self.request.method in SAFE_METHODS:
+			return [AllowAny()]
+		return super().get_permissions()
+
+
+class ViajeListCreateView(PublicReadAPIView):
 	@extend_schema(
 		operation_id='viajes_listar',
 		summary='Listar viajes',
@@ -216,7 +224,7 @@ class ViajeListCreateView(APIView):
 			return _error_servidor()
 
 
-class ViajeDetailView(APIView):
+class ViajeDetailView(PublicReadAPIView):
 	@extend_schema(
 		operation_id='viajes_obtener',
 		summary='Obtener viaje',

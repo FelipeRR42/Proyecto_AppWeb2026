@@ -1,29 +1,40 @@
 from datetime import datetime, time, timezone
-import secrets
+import hashlib
+import logging
 
 from bson import ObjectId
-from django.contrib.auth.hashers import check_password, make_password
+from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth.hashers import make_password
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError, transaction
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from pymongo.errors import DuplicateKeyError, PyMongoError
 from rest_framework import status
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from config.mongo import get_mongo_db
+from .models import Usuario
 from .serializers import (
 	AdministradorWriteSerializer,
 	LoginWriteSerializer,
 	PasajeroWriteSerializer,
+	RegistroWriteSerializer,
 	UsuarioReadSerializer,
 	UsuarioWriteSerializer,
 )
 
 
+logger = logging.getLogger(__name__)
+
 ERROR_RESPONSES = {
 	400: OpenApiResponse(description='Solicitud inválida o identificador mal formado.'),
 	404: OpenApiResponse(description='Usuario no encontrado.'),
 	409: OpenApiResponse(description='Ya existe un usuario con ese correo electrónico.'),
-	500: OpenApiResponse(description='Error interno o conexión con MongoDB no disponible.'),
+	500: OpenApiResponse(description='Error interno al procesar la solicitud.'),
 }
 
 
@@ -46,48 +57,145 @@ def _correo_duplicado(collection, correo, usuario_id=None):
 
 
 class LoginView(APIView):
+	authentication_classes = []
+	permission_classes = [AllowAny]
+
 	@extend_schema(
 		operation_id='auth_login',
 		summary='Iniciar sesión',
 		request=LoginWriteSerializer,
-		responses={200: OpenApiResponse(description='Sesión de prueba iniciada.'), 400: ERROR_RESPONSES[400], 401: OpenApiResponse(description='Credenciales incorrectas.'), 500: ERROR_RESPONSES[500]},
+		responses={
+			200: OpenApiResponse(description='Inicio de sesión correcto.'),
+			400: OpenApiResponse(description='Datos de entrada inválidos.'),
+			401: OpenApiResponse(description='Credenciales incorrectas.'),
+			500: OpenApiResponse(description='No fue posible procesar la solicitud.'),
+		},
 	)
 	def post(self, request):
 		serializer = LoginWriteSerializer(data=request.data)
 		if not serializer.is_valid():
 			return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+		values = serializer.validated_data
+		user_model = get_user_model()
+		users = list(
+			user_model.objects.filter(
+				email__iexact=values['correo_electronico'],
+			).order_by('pk')[:2]
+		)
+		if len(users) != 1:
+			return Response(
+				{'detail': 'El correo electrónico o la contraseña son incorrectos.'},
+				status=status.HTTP_401_UNAUTHORIZED,
+			)
+
+		user = authenticate(
+			request,
+			username=users[0].get_username(),
+			password=values['contrasenia'],
+		)
+		if user is None:
+			return Response(
+				{'detail': 'El correo electrónico o la contraseña son incorrectos.'},
+				status=status.HTTP_401_UNAUTHORIZED,
+			)
+
 		try:
-			values = serializer.validated_data
-			usuario = _usuarios_collection().find_one({
-				'correo_electronico': values['correo_electronico'],
-			})
-			if usuario is None or not check_password(values['contrasenia'], usuario.get('contrasenia', '')):
-				return Response(
-					{'detail': 'El correo electrónico o la contraseña son incorrectos.'},
-					status=status.HTTP_401_UNAUTHORIZED,
-				)
-			if usuario.get('rol') not in ('pasajero', 'administrador'):
-				return Response(
-					{'detail': 'La cuenta no tiene un rol habilitado para iniciar sesión.'},
-					status=status.HTTP_401_UNAUTHORIZED,
-				)
-			perfil_pasajero = usuario.get('perfil_pasajero') or {}
-			return Response({
-				'access': secrets.token_urlsafe(32),
-				'role': usuario['rol'],
-				'user': {
-					'id': str(usuario['_id']),
-					'nombre_completo': usuario.get('nombre_completo', ''),
-					'correo_electronico': usuario.get('correo_electronico', ''),
-					'telefono': perfil_pasajero.get('telefono', ''),
-					'direccion_retorno_predeterminada': perfil_pasajero.get('direccion_retorno_predeterminada', ''),
-				},
-			})
-		except (PyMongoError, ValueError):
+			profile = user.perfil
+		except Usuario.DoesNotExist:
+			logger.error('La cuenta autenticada con id=%s no tiene perfil Usuario.', user.pk)
 			return _error_servidor()
-		except Exception:
-			return _error_servidor()
+
+		refresh = RefreshToken.for_user(user)
+		return Response({
+			'access': str(refresh.access_token),
+			'refresh': str(refresh),
+			'role': profile.rol,
+			'user': {
+				'id': str(profile.pk),
+				'nombre_completo': profile.nombre_completo,
+				'correo_electronico': user.email,
+				'telefono': profile.telefono,
+				'direccion_retorno_predeterminada': profile.direccion_retorno,
+			},
+		})
+
+
+class RegistroView(APIView):
+	authentication_classes = []
+	permission_classes = [AllowAny]
+
+	@extend_schema(
+		operation_id='auth_register',
+		summary='Crear cuenta de pasajero',
+		request=RegistroWriteSerializer,
+		responses={
+			201: OpenApiResponse(description='Cuenta creada correctamente.'),
+			400: OpenApiResponse(description='Datos de entrada inválidos.'),
+			409: OpenApiResponse(description='Ya existe una cuenta con ese correo electrónico.'),
+			500: OpenApiResponse(description='No fue posible procesar la solicitud.'),
+		},
+	)
+	def post(self, request):
+		serializer = RegistroWriteSerializer(data=request.data)
+		if not serializer.is_valid():
+			return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+		values = serializer.validated_data
+		email = values['correo_electronico'].casefold()
+		user_model = get_user_model()
+		if user_model.objects.filter(email__iexact=email).exists():
+			return Response(
+				{'correo_electronico': ['Ya existe una cuenta con este correo.']},
+				status=status.HTTP_409_CONFLICT,
+			)
+
+		username = (
+			email
+			if len(email) <= 150
+			else f'email_{hashlib.sha256(email.encode()).hexdigest()}'
+		)
+		if user_model.objects.filter(username__iexact=username).exists():
+			return Response(
+				{'correo_electronico': ['No se pudo usar este correo para crear la cuenta.']},
+				status=status.HTTP_409_CONFLICT,
+			)
+
+		candidate = user_model(username=username, email=email)
+		try:
+			validate_password(values['contrasenia'], user=candidate)
+		except DjangoValidationError as error:
+			return Response(
+				{'contrasenia': error.messages},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+
+		try:
+			with transaction.atomic():
+				user = user_model.objects.create_user(
+					username=username,
+					email=email,
+					password=values['contrasenia'],
+				)
+				Usuario.objects.create(
+					cuenta=user,
+					nombre_completo=values['nombre_completo'],
+					rol=Usuario.Rol.PASAJERO,
+					telefono=values.get('telefono', ''),
+					direccion_retorno=values.get('direccion_retorno_predeterminada', ''),
+				)
+		except IntegrityError:
+			if user_model.objects.filter(email__iexact=email).exists():
+				return Response(
+					{'correo_electronico': ['Ya existe una cuenta con este correo.']},
+					status=status.HTTP_409_CONFLICT,
+				)
+			raise
+
+		return Response(
+			{'detail': 'Cuenta creada correctamente.'},
+			status=status.HTTP_201_CREATED,
+		)
 
 
 class UsuarioListCreateView(APIView):

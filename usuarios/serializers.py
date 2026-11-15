@@ -1,6 +1,23 @@
 from rest_framework import serializers
 
 
+class RegistroWriteSerializer(serializers.Serializer):
+    nombre_completo = serializers.CharField(max_length=200)
+    correo_electronico = serializers.EmailField()
+    contrasenia = serializers.CharField(
+        write_only=True,
+        min_length=8,
+        max_length=128,
+        trim_whitespace=False,
+    )
+    telefono = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    direccion_retorno_predeterminada = serializers.CharField(
+        max_length=200,
+        required=False,
+        allow_blank=True,
+    )
+
+
 class UsuarioWriteSerializer(serializers.Serializer):
     nombre_completo = serializers.CharField(max_length=200)
     correo_electronico = serializers.EmailField()
@@ -42,5 +59,5 @@ class AdministradorWriteSerializer(PerfilUsuarioWriteSerializer):
 
 
 class LoginWriteSerializer(serializers.Serializer):
-    correo_electronico = serializers.CharField(max_length=254)
+    correo_electronico = serializers.EmailField()
     contrasenia = serializers.CharField(write_only=True, trim_whitespace=False)

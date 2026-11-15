@@ -12,12 +12,11 @@ import {
 } from 'lucide-react'
 import {
   cancelReservation,
-  createPassenger,
   createReservation,
   type PassengerDetails,
   type Reservation,
 } from '../services/reservations'
-import { getSessionUser } from '../services/auth'
+import { getSessionUser, registerAndLoginPassenger } from '../services/auth'
 import type { Trip, TripSeat } from '../types/trip'
 
 type ReservationViewProps = {
@@ -125,9 +124,6 @@ export default function ReservationView({
     direccion_retorno_predeterminada: signedInUser?.direccion_retorno_predeterminada ?? '',
     telefono: signedInUser?.telefono ?? '',
   })
-  const [passengerId, setPassengerId] = useState<string | null>(
-    usesSignedInAccount ? signedInUser.id : null,
-  )
   const [reservation, setReservation] = useState<Reservation | null>(null)
   const [now, setNow] = useState(Date.now())
   const [submitting, setSubmitting] = useState(false)
@@ -184,13 +180,23 @@ export default function ReservationView({
     setActionError(null)
     setActionMessage(null)
     try {
-      const id = passengerId ?? await createPassenger(passenger)
-      if (!passengerId) {
-        setPassengerId(id)
-        setPassenger((current) => ({ ...current, contrasenia: '' }))
+      if (!usesSignedInAccount) {
+        const session = await registerAndLoginPassenger({
+          name: passenger.nombre_completo,
+          email: passenger.correo_electronico,
+          password: passenger.contrasenia,
+          phone: passenger.telefono,
+          address: passenger.direccion_retorno_predeterminada,
+        })
+        setPassenger({
+          nombre_completo: session.user.nombre_completo,
+          correo_electronico: session.user.correo_electronico,
+          contrasenia: '',
+          telefono: session.user.telefono,
+          direccion_retorno_predeterminada: session.user.direccion_retorno_predeterminada,
+        })
       }
       const created = await createReservation({
-        id_pasajero: id,
         id_viaje: trip.id,
         tipo_viaje: tripType,
         asientos: sortedSelection,
@@ -242,10 +248,7 @@ export default function ReservationView({
     }
   }
 
-  async function handleBack() {
-    if (reservation) {
-      if (!(await handleCancel())) return
-    }
+  function handleBack() {
     onBack()
   }
 
@@ -256,7 +259,7 @@ export default function ReservationView({
           className="reservation-back"
           type="button"
           disabled={submitting || cancelling}
-          onClick={() => void handleBack()}
+          onClick={handleBack}
         >
           <ArrowLeft size={15} aria-hidden="true" />
           Volver a los viajes
@@ -441,13 +444,8 @@ export default function ReservationView({
                         <span>{passenger.direccion_retorno_predeterminada || 'Dirección no informada'}</span>
                       </div>
                     ) : (
-                      <fieldset disabled={Boolean(passengerId) || submitting}>
+                      <fieldset disabled={submitting}>
                         <legend>Datos del pasajero</legend>
-                        {passengerId && (
-                          <p className="reservation-form-note">
-                            Datos registrados. Puedes volver a intentar el bloqueo con esta cuenta.
-                          </p>
-                        )}
                         <label>
                           Nombre completo
                           <input
@@ -467,19 +465,17 @@ export default function ReservationView({
                             onChange={(event) => updatePassenger('correo_electronico', event.target.value)}
                           />
                         </label>
-                        {!passengerId && (
-                          <label>
-                            Contraseña
-                            <input
-                              autoComplete="new-password"
-                              type="password"
-                              minLength={8}
-                              required
-                              value={passenger.contrasenia}
-                              onChange={(event) => updatePassenger('contrasenia', event.target.value)}
-                            />
-                          </label>
-                        )}
+                        <label>
+                          Contraseña
+                          <input
+                            autoComplete="new-password"
+                            type="password"
+                            minLength={8}
+                            required
+                            value={passenger.contrasenia}
+                            onChange={(event) => updatePassenger('contrasenia', event.target.value)}
+                          />
+                        </label>
                         <label>
                           Teléfono
                           <input
@@ -512,9 +508,7 @@ export default function ReservationView({
                         ? 'Bloqueando asientos…'
                         : usesSignedInAccount
                           ? 'Bloquear asientos'
-                          : passengerId
-                            ? 'Reintentar bloqueo'
-                            : 'Crear cuenta y bloquear'}
+                          : 'Crear cuenta o iniciar sesión y reservar'}
                     </button>
                     <p className="reservation-api-note">
                       Al confirmar, tus asientos quedan bloqueados por 5 minutos. No se realizará ningún cobro.

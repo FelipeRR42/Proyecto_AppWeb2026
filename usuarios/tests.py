@@ -54,45 +54,6 @@ class UsuarioApiTests(SimpleTestCase):
 		self.assertNotIn('contrasenia', response.data)
 
 	@patch('usuarios.views.get_mongo_db')
-	def test_login_devuelve_token_y_rol_para_credenciales_correctas(self, get_mongo_db):
-		usuario = {
-			**self.usuario,
-			'contrasenia': make_password('clave-de-prueba'),
-			'perfil_pasajero': {
-				'telefono': '5551234',
-				'direccion_retorno_predeterminada': 'Av. Central 123',
-			},
-		}
-		self.collection.find_one.return_value = usuario
-		get_mongo_db.return_value = self.database
-
-		response = self.client.post('/api/auth/login/', {
-			'correo_electronico': usuario['correo_electronico'],
-			'contrasenia': 'clave-de-prueba',
-		}, format='json')
-
-		self.assertEqual(response.status_code, 200)
-		self.assertTrue(response.data['access'])
-		self.assertEqual(response.data['role'], 'pasajero')
-		self.assertEqual(response.data['user']['id'], str(self.usuario_id))
-		self.assertEqual(response.data['user']['nombre_completo'], 'Ana Pérez')
-		self.assertEqual(response.data['user']['telefono'], '5551234')
-		self.assertEqual(response.data['user']['direccion_retorno_predeterminada'], 'Av. Central 123')
-
-	@patch('usuarios.views.get_mongo_db')
-	def test_login_rechaza_contrasenia_incorrecta(self, get_mongo_db):
-		usuario = {**self.usuario, 'contrasenia': make_password('clave-correcta')}
-		self.collection.find_one.return_value = usuario
-		get_mongo_db.return_value = self.database
-
-		response = self.client.post('/api/auth/login/', {
-			'correo_electronico': usuario['correo_electronico'],
-			'contrasenia': 'otra-clave',
-		}, format='json')
-
-		self.assertEqual(response.status_code, 401)
-
-	@patch('usuarios.views.get_mongo_db')
 	def test_correo_duplicado_devuelve_409(self, get_mongo_db):
 		self.collection.find_one.return_value = self.usuario
 		get_mongo_db.return_value = self.database

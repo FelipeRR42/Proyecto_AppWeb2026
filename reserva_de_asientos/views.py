@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from config.mongo import get_mongo_db
+from usuarios.models import Usuario
 from .serializers import (
     ReservaReadSerializer,
     ReservaUpdateSerializer,
@@ -24,7 +25,7 @@ from .services import (
 
 logger = logging.getLogger(__name__)
 ERROR_400 = OpenApiResponse(description='Solicitud inválida o identificador mal formado.')
-ERROR_404 = OpenApiResponse(description='Reserva, pasajero o viaje no encontrado.')
+ERROR_404 = OpenApiResponse(description='Reserva o viaje no encontrado.')
 ERROR_409 = OpenApiResponse(
     description='Uno o más asientos ya no están disponibles para bloquear.'
 )
@@ -47,34 +48,24 @@ def _reserva_no_encontrada():
     )
 
 
-def _resolver_referencias(db, id_pasajero, id_viaje):
-    pasajero = db.usuarios.find_one({
-        '_id': id_pasajero,
-        'rol': 'pasajero',
-    })
-    if pasajero is None:
-        return None, None, Response(
-            {'detail': 'Pasajero no encontrado.'},
-            status=status.HTTP_404_NOT_FOUND,
-        )
-
+def _resolver_referencias(db, id_viaje):
     viaje = db.viajes.find_one({'_id': id_viaje})
     if viaje is None:
-        return None, None, Response(
+        return None, Response(
             {'detail': 'Viaje no encontrado.'},
             status=status.HTTP_404_NOT_FOUND,
         )
-    return pasajero, viaje, None
+    return viaje, None
 
 
-def _crear_documento(values, pasajero, viaje, reserva_id, bloqueado_hasta):
+def _crear_documento(values, pasajero_id, viaje, reserva_id, bloqueado_hasta):
     return {
         '_id': reserva_id,
         'fecha_reserva': datetime.now(timezone.utc),
         'estado': 'pendiente',
         'tipo_viaje': values['tipo_viaje'],
         'direccion_retorno': values.get('direccion_retorno'),
-        'pasajero_titular': {'id_pasajero': pasajero['_id']},
+        'pasajero_titular': {'id_pasajero': str(pasajero_id)},
         'viaje_reservado': {'id_viaje_reservado': viaje['_id']},
         'asientos_reservados': [
             {'num_asiento': numero}
@@ -117,6 +108,19 @@ class ReservaListCreateView(APIView):
         },
     )
     def post(self, request):
+        try:
+            profile = request.user.perfil
+        except Usuario.DoesNotExist:
+            return Response(
+                {'detail': 'Se requiere un perfil de pasajero para reservar.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if profile.rol != Usuario.Rol.PASAJERO:
+            return Response(
+                {'detail': 'Solo las cuentas de pasajero pueden crear reservas.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         serializer = ReservaWriteSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -129,9 +133,8 @@ class ReservaListCreateView(APIView):
             db = get_mongo_db()
             liberar_bloqueos_vencidos(db)
             values = dict(serializer.validated_data)
-            pasajero, viaje, error = _resolver_referencias(
+            viaje, error = _resolver_referencias(
                 db,
-                values['id_pasajero'],
                 values['id_viaje'],
             )
             if error is not None:
@@ -158,7 +161,7 @@ class ReservaListCreateView(APIView):
 
             reserva = _crear_documento(
                 values,
-                pasajero,
+                request.user.pk,
                 viaje,
                 reserva_id,
                 bloqueada_hasta,

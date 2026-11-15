@@ -11,10 +11,25 @@ export interface SessionUser {
   direccion_retorno_predeterminada: string
 }
 
-interface LoginResponse {
+export interface LoginResponse {
   access: string
+  refresh: string
   role: UserRole
   user: SessionUser
+}
+
+export function saveSession(session: LoginResponse): void {
+  sessionStorage.setItem('access_token', session.access)
+  sessionStorage.setItem('refresh_token', session.refresh)
+  sessionStorage.setItem('user_role', session.role)
+  sessionStorage.setItem('session_user', JSON.stringify(session.user))
+}
+
+export function clearSession(): void {
+  sessionStorage.removeItem('access_token')
+  sessionStorage.removeItem('refresh_token')
+  sessionStorage.removeItem('user_role')
+  sessionStorage.removeItem('session_user')
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -70,6 +85,23 @@ async function postAuthRequest(path: string, body: Record<string, string>) {
   return { response, data }
 }
 
+export async function refreshAccessToken(): Promise<string | null> {
+  const refresh = sessionStorage.getItem('refresh_token')
+  if (!refresh) {
+    clearSession()
+    return null
+  }
+
+  const { response, data } = await postAuthRequest('/auth/refresh/', { refresh })
+  if (!response.ok || !isRecord(data) || typeof data.access !== 'string') {
+    clearSession()
+    return null
+  }
+
+  sessionStorage.setItem('access_token', data.access)
+  return data.access
+}
+
 export async function login(
   email: string,
   password: string,
@@ -103,10 +135,12 @@ export async function login(
         : typeof data.token === 'string'
           ? data.token
           : ''
+  const refresh = typeof data.refresh === 'string' ? data.refresh : ''
   const role = user.rol ?? user.role ?? data.rol ?? data.role
 
   if (
     !access ||
+    !refresh ||
     (role !== 'pasajero' && role !== 'administrador')
   ) {
     throw new Error('El servidor devolvió datos de sesión incompletos o inválidos.')
@@ -122,6 +156,7 @@ export async function login(
 
   return {
     access,
+    refresh,
     role,
     user: {
       id: user.id,
@@ -181,7 +216,7 @@ export async function registerPassenger({
   address: string
   password: string
 }): Promise<void> {
-  const { response, data } = await postAuthRequest('/pasajeros/', {
+  const { response, data } = await postAuthRequest('/auth/register/', {
     nombre_completo: name,
     correo_electronico: email,
     contrasenia: password,
@@ -196,4 +231,36 @@ export async function registerPassenger({
         : 'No se pudo crear la cuenta. Inténtalo nuevamente.'
     throw new Error(getErrorMessage(data, fallback))
   }
+}
+
+export async function registerAndLoginPassenger({
+  name,
+  email,
+  phone,
+  address,
+  password,
+}: {
+  name: string
+  email: string
+  phone: string
+  address: string
+  password: string
+}): Promise<LoginResponse> {
+  const { response, data } = await postAuthRequest('/auth/register/', {
+    nombre_completo: name,
+    correo_electronico: email,
+    contrasenia: password,
+    direccion_retorno_predeterminada: address,
+    telefono: phone,
+  })
+
+  if (!response.ok && response.status !== 409) {
+    throw new Error(
+      getErrorMessage(data, 'No se pudo crear la cuenta. Inténtalo nuevamente.'),
+    )
+  }
+
+  const session = await login(email, password)
+  saveSession(session)
+  return session
 }

@@ -1,15 +1,13 @@
 import { BusFront, LogOut } from 'lucide-react'
 import BackButton from './BackButton'
-import { getSessionUser } from '../services/auth'
+import { clearSession, getSessionUser } from '../services/auth'
 
 export default function SiteHeader() {
   const isSearchPage = window.location.pathname.replace(/\/+$/, '') === '/viajes'
   const user = getSessionUser()
 
   function logout() {
-    sessionStorage.removeItem('access_token')
-    sessionStorage.removeItem('user_role')
-    sessionStorage.removeItem('session_user')
+    clearSession()
     window.location.assign('/')
   }
 

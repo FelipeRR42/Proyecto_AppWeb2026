@@ -6,13 +6,17 @@ from .views import (
     LoginView,
     PasajeroDetailView,
     PasajeroListCreateView,
+    RegistroView,
     UsuarioDetailView,
     UsuarioListCreateView,
 )
+from rest_framework_simplejwt.views import TokenRefreshView
 
 
 urlpatterns = [
+    path('auth/register/', RegistroView.as_view(), name='auth-register'),
     path('auth/login/', LoginView.as_view(), name='auth-login'),
+    path('auth/refresh/', TokenRefreshView.as_view(), name='auth-refresh'),
     path('pasajeros/', PasajeroListCreateView.as_view(), name='pasajeros-list-create'),
     path('pasajeros/<str:usuario_id>/', PasajeroDetailView.as_view(), name='pasajeros-detail'),
     path('administradores/', AdministradorListCreateView.as_view(), name='administradores-list-create'),

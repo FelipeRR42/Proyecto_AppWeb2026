@@ -65,6 +65,11 @@ class ViajeApiTests(SimpleTestCase):
 			'patente_vehiculo': 'ABC123',
 		}
 
+	def _autenticar(self):
+		self.client.force_authenticate(
+			user=SimpleNamespace(is_authenticated=True),
+		)
+
 	@patch('viajes.views.get_mongo_db')
 	def test_listar_viajes_devuelve_200(self, get_mongo_db):
 		self.collection.find.return_value.sort.return_value = [self.viaje]
@@ -74,6 +79,13 @@ class ViajeApiTests(SimpleTestCase):
 
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(response.data[0]['id'], str(self.viaje_id))
+
+	@patch('viajes.views.get_mongo_db')
+	def test_crear_viaje_requiere_autenticacion(self, get_mongo_db):
+		response = self.client.post('/api/viajes/', self._payload(), format='json')
+
+		self.assertEqual(response.status_code, 401)
+		get_mongo_db.assert_not_called()
 
 	@patch('viajes.views.get_mongo_db')
 	def test_filtros_de_busqueda_se_aplican_en_mongo(self, get_mongo_db):
@@ -169,6 +181,7 @@ class ViajeApiTests(SimpleTestCase):
 
 	@patch('viajes.views.get_mongo_db')
 	def test_crear_viaje_guarda_referencias_y_asientos(self, get_mongo_db):
+		self._autenticar()
 		self.database.usuarios.find_one.return_value = self.administrador
 		self.database.vehiculos.find_one.return_value = self.vehiculo
 		self.collection.insert_one.return_value = SimpleNamespace(inserted_id=self.viaje_id)
@@ -185,6 +198,7 @@ class ViajeApiTests(SimpleTestCase):
 
 	@patch('viajes.views.get_mongo_db')
 	def test_crear_viaje_rechaza_admin_inexistente(self, get_mongo_db):
+		self._autenticar()
 		self.database.usuarios.find_one.return_value = None
 		get_mongo_db.return_value = self.database
 
@@ -206,6 +220,7 @@ class ViajeApiTests(SimpleTestCase):
 
 	@patch('viajes.views.get_mongo_db')
 	def test_patch_actualiza_sin_perder_campos_existentes(self, get_mongo_db):
+		self._autenticar()
 		self.collection.find_one.side_effect = [self.viaje, self.viaje]
 		self.database.vehiculos.find_one.side_effect = [self.vehiculo, self.vehiculo]
 		self.database.usuarios.find_one.return_value = self.administrador
@@ -222,6 +237,7 @@ class ViajeApiTests(SimpleTestCase):
 
 	@patch('viajes.views.get_mongo_db')
 	def test_eliminar_viaje_con_reservas_devuelve_409(self, get_mongo_db):
+		self._autenticar()
 		self.collection.find_one.return_value = self.viaje
 		self.database.reservas.find_one.return_value = {'_id': ObjectId()}
 		get_mongo_db.return_value = self.database
@@ -233,6 +249,7 @@ class ViajeApiTests(SimpleTestCase):
 
 	@patch('viajes.views.get_mongo_db')
 	def test_eliminar_viaje_sin_reservas_devuelve_204(self, get_mongo_db):
+		self._autenticar()
 		self.collection.find_one.return_value = self.viaje
 		self.database.reservas.find_one.return_value = None
 		get_mongo_db.return_value = self.database
