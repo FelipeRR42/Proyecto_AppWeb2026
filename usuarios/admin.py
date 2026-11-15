@@ -6,11 +6,10 @@ from .models import Usuario
 @admin.register(Usuario)
 class UsuarioAdmin(admin.ModelAdmin):
     list_display = (
-        'id',
+        'cuenta',
         'nombre_completo',
         'rol',
         'telefono',
-        'cuenta',
     )
     list_filter = ('rol',)
     search_fields = (
