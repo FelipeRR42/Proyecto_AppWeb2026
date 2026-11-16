@@ -14,3 +14,4 @@ frontend/dist/
 frontend/.env.local
 frontend/.env.*.local
 frontend/node_modules/
+/Consideraciones.md

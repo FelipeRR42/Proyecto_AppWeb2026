@@ -10,6 +10,7 @@ from rest_framework.test import APIClient
 class ViajeApiTests(SimpleTestCase):
 	def setUp(self):
 		self.client = APIClient()
+		self.account_id = 42
 		self.viaje_id = ObjectId()
 		self.admin_id = ObjectId()
 		self.vehiculo_id = ObjectId()
@@ -65,6 +66,18 @@ class ViajeApiTests(SimpleTestCase):
 			'patente_vehiculo': 'ABC123',
 		}
 
+	def _autenticar(self):
+		self.client.force_authenticate(
+			user=SimpleNamespace(
+				pk=self.account_id,
+				is_authenticated=True,
+				perfil=SimpleNamespace(
+					rol='administrador',
+					nombre_completo='Administradora PostgreSQL',
+				),
+			),
+		)
+
 	@patch('viajes.views.get_mongo_db')
 	def test_listar_viajes_devuelve_200(self, get_mongo_db):
 		self.collection.find.return_value.sort.return_value = [self.viaje]
@@ -74,6 +87,29 @@ class ViajeApiTests(SimpleTestCase):
 
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(response.data[0]['id'], str(self.viaje_id))
+
+	@patch('viajes.views.get_mongo_db')
+	def test_crear_viaje_requiere_autenticacion(self, get_mongo_db):
+		response = self.client.post('/api/viajes/', self._payload(), format='json')
+
+		self.assertEqual(response.status_code, 401)
+		get_mongo_db.assert_not_called()
+
+	@patch('viajes.views.get_mongo_db')
+	def test_pasajero_no_puede_crear_viaje(self, get_mongo_db):
+		self.client.force_authenticate(user=SimpleNamespace(
+			pk=self.account_id,
+			is_authenticated=True,
+			perfil=SimpleNamespace(
+				rol='pasajero',
+				nombre_completo='Pasajero de prueba',
+			),
+		))
+
+		response = self.client.post('/api/viajes/', self._payload(), format='json')
+
+		self.assertEqual(response.status_code, 403)
+		get_mongo_db.assert_not_called()
 
 	@patch('viajes.views.get_mongo_db')
 	def test_filtros_de_busqueda_se_aplican_en_mongo(self, get_mongo_db):
@@ -169,6 +205,7 @@ class ViajeApiTests(SimpleTestCase):
 
 	@patch('viajes.views.get_mongo_db')
 	def test_crear_viaje_guarda_referencias_y_asientos(self, get_mongo_db):
+		self._autenticar()
 		self.database.usuarios.find_one.return_value = self.administrador
 		self.database.vehiculos.find_one.return_value = self.vehiculo
 		self.collection.insert_one.return_value = SimpleNamespace(inserted_id=self.viaje_id)
@@ -179,13 +216,21 @@ class ViajeApiTests(SimpleTestCase):
 
 		self.assertEqual(response.status_code, 201)
 		documento = self.collection.insert_one.call_args.args[0]
-		self.assertEqual(documento['administrador']['id_admin'], self.admin_id)
+		self.assertEqual(
+			documento['administrador']['id_admin'],
+			str(self.account_id),
+		)
+		self.assertEqual(
+			documento['administrador']['nombre'],
+			'Administradora PostgreSQL',
+		)
 		self.assertEqual(documento['patente_vehiculo'], self.vehiculo_id)
 		self.assertEqual(len(documento['asientos']), 2)
 
 	@patch('viajes.views.get_mongo_db')
-	def test_crear_viaje_rechaza_admin_inexistente(self, get_mongo_db):
-		self.database.usuarios.find_one.return_value = None
+	def test_crear_viaje_rechaza_vehiculo_inexistente(self, get_mongo_db):
+		self._autenticar()
+		self.database.vehiculos.find_one.return_value = None
 		get_mongo_db.return_value = self.database
 
 		response = self.client.post('/api/viajes/', self._payload(), format='json')
@@ -206,6 +251,7 @@ class ViajeApiTests(SimpleTestCase):
 
 	@patch('viajes.views.get_mongo_db')
 	def test_patch_actualiza_sin_perder_campos_existentes(self, get_mongo_db):
+		self._autenticar()
 		self.collection.find_one.side_effect = [self.viaje, self.viaje]
 		self.database.vehiculos.find_one.side_effect = [self.vehiculo, self.vehiculo]
 		self.database.usuarios.find_one.return_value = self.administrador
@@ -222,6 +268,7 @@ class ViajeApiTests(SimpleTestCase):
 
 	@patch('viajes.views.get_mongo_db')
 	def test_eliminar_viaje_con_reservas_devuelve_409(self, get_mongo_db):
+		self._autenticar()
 		self.collection.find_one.return_value = self.viaje
 		self.database.reservas.find_one.return_value = {'_id': ObjectId()}
 		get_mongo_db.return_value = self.database
@@ -233,6 +280,7 @@ class ViajeApiTests(SimpleTestCase):
 
 	@patch('viajes.views.get_mongo_db')
 	def test_eliminar_viaje_sin_reservas_devuelve_204(self, get_mongo_db):
+		self._autenticar()
 		self.collection.find_one.return_value = self.viaje
 		self.database.reservas.find_one.return_value = None
 		get_mongo_db.return_value = self.database
@@ -246,6 +294,11 @@ class ViajeApiTests(SimpleTestCase):
 class VehiculoApiTests(SimpleTestCase):
 	def setUp(self):
 		self.client = APIClient()
+		self.client.force_authenticate(user=SimpleNamespace(
+			pk=42,
+			is_authenticated=True,
+			perfil=SimpleNamespace(rol='administrador'),
+		))
 		self.vehiculo_id = ObjectId()
 		self.vehiculo = {
 			'_id': self.vehiculo_id,
@@ -255,6 +308,21 @@ class VehiculoApiTests(SimpleTestCase):
 		}
 		self.database = MagicMock()
 		self.collection = self.database.vehiculos
+
+	def test_pasajero_no_puede_crear_vehiculo(self):
+		self.client.force_authenticate(user=SimpleNamespace(
+			pk=43,
+			is_authenticated=True,
+			perfil=SimpleNamespace(rol='pasajero'),
+		))
+
+		response = self.client.post('/api/vehiculos/', {
+			'patente': 'ABC123',
+			'modelo': 'Bus urbano',
+			'capacidad_maxima': 32,
+		}, format='json')
+
+		self.assertEqual(response.status_code, 403)
 
 	@patch('viajes.vehiculos_api.get_mongo_db')
 	def test_listar_vehiculos_devuelve_200(self, get_mongo_db):

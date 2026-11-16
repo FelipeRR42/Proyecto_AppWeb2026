@@ -3,26 +3,41 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from bson import ObjectId
-from django.test import SimpleTestCase
+from django.contrib.auth import get_user_model
+from django.test import TestCase
 from rest_framework.test import APIClient
 
+from usuarios.models import Usuario
 
-class NotificacionApiTests(SimpleTestCase):
+
+class NotificacionApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
-        self.admin_id = ObjectId()
-        self.pasajero_id = ObjectId()
+        user_model = get_user_model()
+        self.admin_account = user_model.objects.create_user(
+            username='admin-test',
+            email='admin@example.test',
+            password='Clave-segura-2026!',
+        )
+        self.pasajero_account = user_model.objects.create_user(
+            username='pasajero-test',
+            email='pasajero@example.test',
+            password='Clave-segura-2026!',
+        )
+        Usuario.objects.create(
+            cuenta=self.admin_account,
+            nombre_completo='Administradora de prueba',
+            rol=Usuario.Rol.ADMINISTRADOR,
+        )
+        Usuario.objects.create(
+            cuenta=self.pasajero_account,
+            nombre_completo='Pasajero de prueba',
+            rol=Usuario.Rol.PASAJERO,
+        )
+        self.client.force_authenticate(user=self.admin_account)
+        self.admin_id = self.admin_account.pk
+        self.pasajero_id = self.pasajero_account.pk
         self.notificacion_id = ObjectId()
-        self.administrador = {
-            '_id': self.admin_id,
-            'nombre_completo': 'Administradora de prueba',
-            'rol': 'administrador',
-        }
-        self.pasajero = {
-            '_id': self.pasajero_id,
-            'nombre_completo': 'Pasajero de prueba',
-            'rol': 'pasajero',
-        }
         self.notificacion = {
             '_id': self.notificacion_id,
             'titulo': 'Aviso de prueba',
@@ -30,22 +45,19 @@ class NotificacionApiTests(SimpleTestCase):
             'fecha_creacion': datetime(2026, 11, 2, tzinfo=timezone.utc),
             'administrador': {
                 'id_admin': self.admin_id,
-                'nombre': self.administrador['nombre_completo'],
+                'nombre': 'Administradora de prueba',
             },
             'destinatarios': [
                 {'id_pasajero': self.pasajero_id, 'leido': False},
             ],
         }
         self.notificaciones = MagicMock()
-        self.usuarios = MagicMock()
         self.db = SimpleNamespace(
             notificaciones=self.notificaciones,
-            usuarios=self.usuarios,
         )
 
     def _datos_notificacion(self):
         return {
-            'id_admin': str(self.admin_id),
             'titulo': 'Aviso de prueba',
             'cuerpo': 'Contenido de la notificación de prueba.',
             'destinatarios': [
@@ -61,6 +73,7 @@ class NotificacionApiTests(SimpleTestCase):
         respuesta = self.client.get('/api/notificaciones/')
 
         self.assertEqual(respuesta.status_code, 200)
+        self.notificaciones.find.assert_called_once_with({})
         self.assertEqual(respuesta.data[0]['id_notificacion'], str(self.notificacion_id))
         self.assertEqual(respuesta.data[0]['id_admin'], str(self.admin_id))
         self.assertEqual(
@@ -70,8 +83,6 @@ class NotificacionApiTests(SimpleTestCase):
 
     @patch('usuarios.notificacion_views.get_mongo_db')
     def test_crear_guarda_documento_mongo_y_devuelve_object_ids(self, get_mongo_db):
-        self.usuarios.find_one.return_value = self.administrador
-        self.usuarios.find.return_value = [self.pasajero]
         self.notificaciones.insert_one.return_value = SimpleNamespace(
             inserted_id=self.notificacion_id,
         )
@@ -87,13 +98,11 @@ class NotificacionApiTests(SimpleTestCase):
         self.assertEqual(respuesta.data['id_notificacion'], str(self.notificacion_id))
         self.assertEqual(respuesta.data['id_admin'], str(self.admin_id))
         guardado = self.notificaciones.insert_one.call_args.args[0]
-        self.assertEqual(guardado['administrador']['id_admin'], self.admin_id)
-        self.assertEqual(guardado['destinatarios'][0]['id_pasajero'], self.pasajero_id)
+        self.assertEqual(guardado['administrador']['id_admin'], str(self.admin_id))
+        self.assertEqual(guardado['destinatarios'][0]['id_pasajero'], str(self.pasajero_id))
 
     @patch('usuarios.notificacion_views.get_mongo_db')
     def test_crud_actualizar_eliminar_y_consultar(self, get_mongo_db):
-        self.usuarios.find_one.return_value = self.administrador
-        self.usuarios.find.return_value = [self.pasajero]
         self.notificaciones.find_one.side_effect = [
             self.notificacion,
             self.notificacion,
@@ -129,6 +138,32 @@ class NotificacionApiTests(SimpleTestCase):
         )
 
     @patch('usuarios.notificacion_views.get_mongo_db')
+    def test_pasajero_solo_lista_sus_notificaciones(self, get_mongo_db):
+        self.client.force_authenticate(user=self.pasajero_account)
+        self.notificaciones.find.return_value = [self.notificacion]
+        get_mongo_db.return_value = self.db
+
+        respuesta = self.client.get('/api/notificaciones/')
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.notificaciones.find.assert_called_once_with({
+            'destinatarios.id_pasajero': str(self.pasajero_id),
+        })
+
+    @patch('usuarios.notificacion_views.get_mongo_db')
+    def test_pasajero_no_puede_crear_notificacion(self, get_mongo_db):
+        self.client.force_authenticate(user=self.pasajero_account)
+
+        respuesta = self.client.post(
+            '/api/notificaciones/',
+            self._datos_notificacion(),
+            format='json',
+        )
+
+        self.assertEqual(respuesta.status_code, 403)
+        get_mongo_db.assert_not_called()
+
+    @patch('usuarios.notificacion_views.get_mongo_db')
     def test_identificador_invalido_devuelve_400_sin_consultar_mongo(self, get_mongo_db):
         respuesta = self.client.get('/api/notificaciones/no-es-object-id/')
 
@@ -146,13 +181,14 @@ class NotificacionApiTests(SimpleTestCase):
         self.assertEqual(respuesta.data, {'detail': 'Notificación no encontrada.'})
 
     @patch('usuarios.notificacion_views.get_mongo_db')
-    def test_administrador_inexistente_devuelve_400(self, get_mongo_db):
-        self.usuarios.find_one.return_value = None
+    def test_destinatario_inexistente_devuelve_400(self, get_mongo_db):
         get_mongo_db.return_value = self.db
+        datos = self._datos_notificacion()
+        datos['destinatarios'] = [{'id_pasajero': 999999, 'leido': False}]
 
         respuesta = self.client.post(
             '/api/notificaciones/',
-            self._datos_notificacion(),
+            datos,
             format='json',
         )
 

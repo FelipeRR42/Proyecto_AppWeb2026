@@ -15,10 +15,6 @@ class StrictSerializer(serializers.Serializer):
 
 
 class ReservaWriteSerializer(StrictSerializer):
-    id_pasajero = serializers.CharField(
-        max_length=24,
-        help_text='ObjectId de MongoDB del pasajero.',
-    )
     id_viaje = serializers.CharField(
         max_length=24,
         help_text='ObjectId de MongoDB del viaje.',
@@ -40,11 +36,6 @@ class ReservaWriteSerializer(StrictSerializer):
         if len(value) != len(set(value)):
             raise serializers.ValidationError('No se permiten asientos repetidos.')
         return value
-
-    def validate_id_pasajero(self, value):
-        if not ObjectId.is_valid(value):
-            raise serializers.ValidationError('Debe ser un ObjectId válido.')
-        return ObjectId(value)
 
     def validate_id_viaje(self, value):
         if not ObjectId.is_valid(value):

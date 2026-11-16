@@ -1,12 +1,29 @@
 from rest_framework import serializers
 
 
+class RegistroWriteSerializer(serializers.Serializer):
+    nombre_completo = serializers.CharField(max_length=200)
+    correo_electronico = serializers.EmailField()
+    contrasenia = serializers.CharField(
+        write_only=True,
+        min_length=8,
+        max_length=128,
+        trim_whitespace=False,
+    )
+    telefono = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    direccion_retorno_predeterminada = serializers.CharField(
+        max_length=200,
+        required=False,
+        allow_blank=True,
+    )
+
+
 class UsuarioWriteSerializer(serializers.Serializer):
     nombre_completo = serializers.CharField(max_length=200)
     correo_electronico = serializers.EmailField()
     contrasenia = serializers.CharField(write_only=True, min_length=8, max_length=128)
     rol = serializers.ChoiceField(
-        choices=('usuario', 'pasajero', 'administrador'),
+        choices=('pasajero', 'administrador'),
         required=False,
     )
     perfil_pasajero = serializers.JSONField(required=False, allow_null=True)
@@ -20,6 +37,7 @@ class UsuarioReadSerializer(serializers.Serializer):
     rol = serializers.CharField(required=False)
     perfil_pasajero = serializers.JSONField(required=False, allow_null=True)
     perfil_admin = serializers.JSONField(required=False, allow_null=True)
+    archivado = serializers.BooleanField(required=False, default=False)
 
     def get_id(self, usuario) -> str:
         return str(usuario['_id'])
@@ -27,7 +45,7 @@ class UsuarioReadSerializer(serializers.Serializer):
 
 class PerfilUsuarioWriteSerializer(serializers.Serializer):
     nombre_completo = serializers.CharField(max_length=200)
-    correo_electronico = serializers.CharField(max_length=254)
+    correo_electronico = serializers.EmailField(max_length=254)
     contrasenia = serializers.CharField(write_only=True, max_length=128, trim_whitespace=False)
 
 
@@ -38,9 +56,14 @@ class PasajeroWriteSerializer(PerfilUsuarioWriteSerializer):
 
 class AdministradorWriteSerializer(PerfilUsuarioWriteSerializer):
     fecha_contratacion = serializers.DateField()
-    telefono_corporativo = serializers.CharField(max_length=20)
+    telefono_corporativo = serializers.CharField(
+        max_length=20,
+        required=False,
+        allow_blank=True,
+        default='',
+    )
 
 
 class LoginWriteSerializer(serializers.Serializer):
-    correo_electronico = serializers.CharField(max_length=254)
+    correo_electronico = serializers.EmailField()
     contrasenia = serializers.CharField(write_only=True, trim_whitespace=False)

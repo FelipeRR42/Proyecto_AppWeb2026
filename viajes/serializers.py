@@ -17,7 +17,7 @@ class ViajeWriteSerializer(serializers.Serializer):
     precio_ida = serializers.IntegerField(min_value=0)
     precio_ida_y_vuelta = serializers.IntegerField(min_value=0)
     estado = serializers.ChoiceField(choices=ESTADOS_VIAJE)
-    administrador_id = serializers.CharField()
+    administrador_id = serializers.CharField(required=False, write_only=True)
     patente_vehiculo = serializers.CharField(max_length=20)
 
     def validate(self, attrs):

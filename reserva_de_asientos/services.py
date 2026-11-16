@@ -21,6 +21,10 @@ def liberar_bloqueos_vencidos(db, ahora=None, viaje_id=None):
         viajes_query['_id'] = viaje_id
         reservas_query['viaje_reservado.id_viaje_reservado'] = viaje_id
 
+    db.reservas.update_many(
+        reservas_query,
+        {'$set': {'estado': 'vencida'}},
+    )
     db.viajes.update_many(
         viajes_query,
         {
@@ -34,10 +38,6 @@ def liberar_bloqueos_vencidos(db, ahora=None, viaje_id=None):
             'asiento.estado': 'bloqueado',
             'asiento.bloqueado_hasta': {'$lte': ahora},
         }],
-    )
-    db.reservas.update_many(
-        reservas_query,
-        {'$set': {'estado': 'vencida'}},
     )
 
 
