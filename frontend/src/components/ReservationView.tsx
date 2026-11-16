@@ -16,7 +16,11 @@ import {
   type PassengerDetails,
   type Reservation,
 } from '../services/reservations'
-import { getSessionUser, registerAndLoginPassenger } from '../services/auth'
+import {
+  getCurrentPassengerProfile,
+  getSessionUser,
+  registerAndLoginPassenger,
+} from '../services/auth'
 import type { Trip, TripSeat } from '../types/trip'
 
 type ReservationViewProps = {
@@ -118,18 +122,50 @@ export default function ReservationView({
   const [selectedSeats, setSelectedSeats] = useState<number[]>([])
   const [tripType, setTripType] = useState<TripType>('ida')
   const [passenger, setPassenger] = useState<PassengerDetails>({
-    nombre_completo: signedInUser?.nombre_completo ?? '',
-    correo_electronico: signedInUser?.correo_electronico ?? '',
+    nombre_completo: '',
+    correo_electronico: '',
     contrasenia: '',
-    direccion_retorno_predeterminada: signedInUser?.direccion_retorno_predeterminada ?? '',
-    telefono: signedInUser?.telefono ?? '',
+    direccion_retorno_predeterminada: '',
+    telefono: '',
   })
+  const [profileLoading, setProfileLoading] = useState(usesSignedInAccount)
+  const [profileLoadError, setProfileLoadError] = useState(false)
+  const [profileRequestVersion, setProfileRequestVersion] = useState(0)
   const [reservation, setReservation] = useState<Reservation | null>(null)
   const [now, setNow] = useState(Date.now())
   const [submitting, setSubmitting] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionMessage, setActionMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!usesSignedInAccount) return
+
+    let active = true
+    setProfileLoading(true)
+    setProfileLoadError(false)
+    void getCurrentPassengerProfile()
+      .then((profile) => {
+        if (!active) return
+        setPassenger({ ...profile, contrasenia: '' })
+      })
+      .catch((reason: unknown) => {
+        if (!active) return
+        setProfileLoadError(true)
+        setActionError(
+          reason instanceof Error
+            ? reason.message
+            : 'No se pudieron cargar los datos de tu cuenta.',
+        )
+      })
+      .finally(() => {
+        if (active) setProfileLoading(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [usesSignedInAccount, profileRequestVersion])
 
   const seats = trip?.asientos ?? []
   const selectedSeatCount = selectedSeats.length
@@ -174,14 +210,14 @@ export default function ReservationView({
 
   async function handleReservation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!trip || !selectedSeats.length || reservation) return
+    if (!trip || !selectedSeats.length || reservation || profileLoading || profileLoadError) return
 
     setSubmitting(true)
     setActionError(null)
     setActionMessage(null)
     try {
       if (!usesSignedInAccount) {
-        const session = await registerAndLoginPassenger({
+        await registerAndLoginPassenger({
           name: passenger.nombre_completo,
           email: passenger.correo_electronico,
           password: passenger.contrasenia,
@@ -189,11 +225,11 @@ export default function ReservationView({
           address: passenger.direccion_retorno_predeterminada,
         })
         setPassenger({
-          nombre_completo: session.user.nombre_completo,
-          correo_electronico: session.user.correo_electronico,
+          nombre_completo: passenger.nombre_completo,
+          correo_electronico: passenger.correo_electronico,
           contrasenia: '',
-          telefono: session.user.telefono,
-          direccion_retorno_predeterminada: session.user.direccion_retorno_predeterminada,
+          telefono: passenger.telefono,
+          direccion_retorno_predeterminada: passenger.direccion_retorno_predeterminada,
         })
       }
       const created = await createReservation({
@@ -438,10 +474,26 @@ export default function ReservationView({
                     {usesSignedInAccount ? (
                       <div className="reservation-account-summary">
                         <strong>Datos de tu cuenta</strong>
-                        <span>{passenger.nombre_completo}</span>
-                        <span>{passenger.correo_electronico}</span>
-                        <span>{passenger.telefono || 'Teléfono no informado'}</span>
-                        <span>{passenger.direccion_retorno_predeterminada || 'Dirección no informada'}</span>
+                        {profileLoading ? (
+                          <span>Cargando los datos de tu cuenta…</span>
+                        ) : profileLoadError ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActionError(null)
+                              setProfileRequestVersion((version) => version + 1)
+                            }}
+                          >
+                            Reintentar carga del perfil
+                          </button>
+                        ) : (
+                          <>
+                            <span>{passenger.nombre_completo}</span>
+                            <span>{passenger.correo_electronico}</span>
+                            <span>{passenger.telefono || 'Teléfono no informado'}</span>
+                            <span>{passenger.direccion_retorno_predeterminada || 'Dirección no informada'}</span>
+                          </>
+                        )}
                       </div>
                     ) : (
                       <fieldset disabled={submitting}>
@@ -502,9 +554,17 @@ export default function ReservationView({
                     <button
                       className="reservation-confirm"
                       type="submit"
-                      disabled={submitting || selectedSeats.length === 0 || availableCount === 0}
+                      disabled={
+                        submitting ||
+                        profileLoading ||
+                        profileLoadError ||
+                        selectedSeats.length === 0 ||
+                        availableCount === 0
+                      }
                     >
-                      {submitting
+                      {profileLoading
+                        ? 'Cargando perfil…'
+                        : submitting
                         ? 'Bloqueando asientos…'
                         : usesSignedInAccount
                           ? 'Bloquear asientos'

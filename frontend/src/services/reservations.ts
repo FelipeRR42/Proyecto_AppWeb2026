@@ -1,5 +1,5 @@
 import { API_URL } from './trips'
-import { clearSession, refreshAccessToken } from './auth'
+import { clearSession, getCsrfToken, refreshAccessToken } from './auth'
 
 export type PassengerDetails = {
   nombre_completo: string
@@ -16,30 +16,28 @@ export type Reservation = {
 }
 
 async function authenticatedFetch(path: string, init: RequestInit): Promise<Response> {
-  const send = (accessToken: string) => {
+  const send = async () => {
     const headers = new Headers(init.headers)
-    headers.set('Authorization', `Bearer ${accessToken}`)
-    return fetch(`${API_URL}${path}`, { ...init, headers })
+    if (!['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(init.method?.toUpperCase() ?? 'GET')) {
+      headers.set('X-CSRFToken', await getCsrfToken())
+    }
+    return fetch(`${API_URL}${path}`, {
+      ...init,
+      credentials: 'include',
+      headers,
+    })
   }
 
-  let accessToken = sessionStorage.getItem('access_token')
-  if (!accessToken) {
-    accessToken = await refreshAccessToken()
-  }
-  if (!accessToken) {
-    throw new Error('Debes iniciar sesión para continuar.')
-  }
-
-  let response = await send(accessToken)
+  let response = await send()
   if (response.status !== 401) return response
 
-  accessToken = await refreshAccessToken()
-  if (!accessToken) {
+  const refreshed = await refreshAccessToken()
+  if (!refreshed) {
     clearSession()
     throw new Error('Tu sesión venció o ya no es válida. Inicia sesión nuevamente.')
   }
 
-  response = await send(accessToken)
+  response = await send()
   if (response.status === 401) {
     clearSession()
     throw new Error('Tu sesión venció o ya no es válida. Inicia sesión nuevamente.')

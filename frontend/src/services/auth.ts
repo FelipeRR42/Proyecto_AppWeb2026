@@ -3,32 +3,43 @@ const API_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
 export type UserRole = 'pasajero' | 'administrador'
 
 export interface SessionUser {
-  id: string
   role: UserRole
+  nombre_completo: string
+}
+
+export interface LoginResponse {
+  role: UserRole
+  nombre_completo: string
+}
+
+export interface PassengerProfile {
   nombre_completo: string
   correo_electronico: string
   telefono: string
   direccion_retorno_predeterminada: string
 }
 
-export interface LoginResponse {
-  access: string
-  refresh: string
-  role: UserRole
-  user: SessionUser
+let csrfTokenCache: string | null = null
+
+function clearLegacyTokens(): void {
+  if (typeof window === 'undefined') return
+  sessionStorage.removeItem('access_token')
+  sessionStorage.removeItem('refresh_token')
+  sessionStorage.removeItem('session_user')
 }
 
+clearLegacyTokens()
+
 export function saveSession(session: LoginResponse): void {
-  sessionStorage.setItem('access_token', session.access)
-  sessionStorage.setItem('refresh_token', session.refresh)
+  clearLegacyTokens()
   sessionStorage.setItem('user_role', session.role)
-  sessionStorage.setItem('session_user', JSON.stringify(session.user))
+  sessionStorage.setItem('user_name', session.nombre_completo)
 }
 
 export function clearSession(): void {
-  sessionStorage.removeItem('access_token')
-  sessionStorage.removeItem('refresh_token')
+  clearLegacyTokens()
   sessionStorage.removeItem('user_role')
+  sessionStorage.removeItem('user_name')
   sessionStorage.removeItem('session_user')
 }
 
@@ -59,16 +70,46 @@ function getErrorMessage(data: unknown, fallback: string): string {
   return fallback
 }
 
+export async function getCsrfToken(): Promise<string> {
+  if (csrfTokenCache) return csrfTokenCache
+
+  let response: Response
+  try {
+    response = await fetch(`${API_URL}/auth/csrf/`, {
+      headers: { Accept: 'application/json' },
+      credentials: 'include',
+    })
+  } catch {
+    throw new Error('No pudimos conectar con el servidor. Inténtalo nuevamente.')
+  }
+
+  let data: unknown
+  try {
+    data = await response.json()
+  } catch {
+    data = null
+  }
+  if (!response.ok || !isRecord(data) || typeof data.csrfToken !== 'string') {
+    throw new Error('No se pudo iniciar una solicitud segura. Recarga la página e inténtalo nuevamente.')
+  }
+
+  csrfTokenCache = data.csrfToken
+  return csrfTokenCache
+}
+
 async function postAuthRequest(path: string, body: Record<string, string>) {
   let response: Response
 
   try {
+    const csrfToken = await getCsrfToken()
     response = await fetch(`${API_URL}${path}`, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
+        'X-CSRFToken': csrfToken,
       },
+      credentials: 'include',
       body: JSON.stringify(body),
     })
   } catch {
@@ -85,21 +126,22 @@ async function postAuthRequest(path: string, body: Record<string, string>) {
   return { response, data }
 }
 
-export async function refreshAccessToken(): Promise<string | null> {
-  const refresh = sessionStorage.getItem('refresh_token')
-  if (!refresh) {
+export async function refreshAccessToken(): Promise<boolean> {
+  const { response } = await postAuthRequest('/auth/refresh/', {})
+  if (!response.ok) {
     clearSession()
-    return null
+    return false
   }
 
-  const { response, data } = await postAuthRequest('/auth/refresh/', { refresh })
-  if (!response.ok || !isRecord(data) || typeof data.access !== 'string') {
-    clearSession()
-    return null
-  }
+  return true
+}
 
-  sessionStorage.setItem('access_token', data.access)
-  return data.access
+export async function logoutSession(): Promise<void> {
+  const { response } = await postAuthRequest('/auth/logout/', {})
+  if (!response.ok) {
+    throw new Error('No se pudo cerrar la sesión en el servidor.')
+  }
+  clearSession()
 }
 
 export async function login(
@@ -126,80 +168,79 @@ export async function login(
     throw new Error('El servidor devolvió una respuesta de inicio de sesión inválida.')
   }
 
-  const user = isRecord(data.user) ? data.user : data
-  const access =
-    typeof data.access === 'string'
-      ? data.access
-      : typeof data.access_token === 'string'
-        ? data.access_token
-        : typeof data.token === 'string'
-          ? data.token
-          : ''
-  const refresh = typeof data.refresh === 'string' ? data.refresh : ''
-  const role = user.rol ?? user.role ?? data.rol ?? data.role
+  const role = data.role
+  const nombreCompleto = data.nombre_completo
 
   if (
-    !access ||
-    !refresh ||
-    (role !== 'pasajero' && role !== 'administrador')
+    (role !== 'pasajero' && role !== 'administrador') ||
+    typeof nombreCompleto !== 'string'
   ) {
     throw new Error('El servidor devolvió datos de sesión incompletos o inválidos.')
   }
 
+  return { role, nombre_completo: nombreCompleto }
+}
+
+export async function getCurrentPassengerProfile(): Promise<PassengerProfile> {
+  const sendRequest = async () => {
+    try {
+      return await fetch(`${API_URL}/auth/profile/`, {
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      })
+    } catch {
+      throw new Error('No pudimos conectar con el servidor. Inténtalo nuevamente.')
+    }
+  }
+
+  let response = await sendRequest()
+  if (response.status === 401) {
+    if (!(await refreshAccessToken())) {
+      throw new Error('Tu sesión venció o ya no es válida. Inicia sesión nuevamente.')
+    }
+    response = await sendRequest()
+  }
+
+  let data: unknown
+  try {
+    data = await response.json()
+  } catch {
+    data = null
+  }
+
+  if (!response.ok) {
+    if (response.status === 401) clearSession()
+    throw new Error(getErrorMessage(data, 'No se pudieron cargar los datos del perfil.'))
+  }
+
   if (
-    typeof user.id !== 'string' ||
-    typeof user.nombre_completo !== 'string' ||
-    typeof user.correo_electronico !== 'string'
+    !isRecord(data) ||
+    typeof data.nombre_completo !== 'string' ||
+    typeof data.correo_electronico !== 'string' ||
+    typeof data.telefono !== 'string' ||
+    typeof data.direccion_retorno_predeterminada !== 'string'
   ) {
-    throw new Error('El servidor no devolvió los datos del perfil de usuario.')
+    throw new Error('El servidor devolvió datos de perfil incompletos o inválidos.')
   }
 
   return {
-    access,
-    refresh,
-    role,
-    user: {
-      id: user.id,
-      role,
-      nombre_completo: user.nombre_completo,
-      correo_electronico: user.correo_electronico,
-      telefono: typeof user.telefono === 'string' ? user.telefono : '',
-      direccion_retorno_predeterminada:
-        typeof user.direccion_retorno_predeterminada === 'string'
-          ? user.direccion_retorno_predeterminada
-          : '',
-    },
+    nombre_completo: data.nombre_completo,
+    correo_electronico: data.correo_electronico,
+    telefono: data.telefono,
+    direccion_retorno_predeterminada: data.direccion_retorno_predeterminada,
   }
 }
 
 export function getSessionUser(): SessionUser | null {
-  const storedUser = sessionStorage.getItem('session_user')
-  if (!storedUser) return null
-
-  try {
-    const user: unknown = JSON.parse(storedUser)
-    if (
-      isRecord(user) &&
-      typeof user.id === 'string' &&
-      (user.role === 'pasajero' || user.role === 'administrador') &&
-      typeof user.nombre_completo === 'string' &&
-      typeof user.correo_electronico === 'string' &&
-      typeof user.telefono === 'string' &&
-      typeof user.direccion_retorno_predeterminada === 'string'
-    ) {
-      return {
-        id: user.id,
-        role: user.role,
-        nombre_completo: user.nombre_completo,
-        correo_electronico: user.correo_electronico,
-        telefono: user.telefono,
-        direccion_retorno_predeterminada: user.direccion_retorno_predeterminada,
-      }
+  const role = sessionStorage.getItem('user_role')
+  if (role === 'pasajero' || role === 'administrador') {
+    return {
+      role,
+      nombre_completo: sessionStorage.getItem('user_name') ?? '',
     }
-  } catch {
-    sessionStorage.removeItem('session_user')
   }
-
+  sessionStorage.removeItem('user_role')
+  sessionStorage.removeItem('user_name')
   return null
 }
 

@@ -36,6 +36,7 @@ export async function getUpcomingTrips(
 
   const response = await fetch(`${API_URL}/viajes/?${searchParams.toString()}`, {
     headers: { Accept: 'application/json' },
+    credentials: 'include',
     signal,
   })
 
@@ -54,6 +55,7 @@ export async function getUpcomingTrips(
 export async function getTripById(id: string, signal?: AbortSignal): Promise<Trip> {
   const response = await fetch(`${API_URL}/viajes/${encodeURIComponent(id)}/`, {
     headers: { Accept: 'application/json' },
+    credentials: 'include',
     signal,
   })
 

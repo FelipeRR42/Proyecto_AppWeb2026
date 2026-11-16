@@ -3,20 +3,33 @@ import hashlib
 import logging
 
 from bson import ObjectId
+from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
+from django.middleware.csrf import get_token
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import ensure_csrf_cookie
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from pymongo.errors import DuplicateKeyError, PyMongoError
 from rest_framework import status
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from config.mongo import get_mongo_db
+from .authentication import (
+	CookieJWTAuthentication,
+	clear_auth_cookies,
+	enforce_csrf,
+	set_access_cookie,
+	set_refresh_cookie,
+)
 from .models import Usuario
 from .permissions import IsAppAdministrator
 from .serializers import (
@@ -57,6 +70,15 @@ def _correo_duplicado(collection, correo, usuario_id=None):
 	return collection.find_one(query) is not None
 
 
+@method_decorator(ensure_csrf_cookie, name='dispatch')
+class CsrfTokenView(APIView):
+	authentication_classes = []
+	permission_classes = [AllowAny]
+
+	def get(self, request):
+		return Response({'csrfToken': get_token(request._request)})
+
+
 class LoginView(APIView):
 	authentication_classes = []
 	permission_classes = [AllowAny]
@@ -66,13 +88,16 @@ class LoginView(APIView):
 		summary='Iniciar sesión',
 		request=LoginWriteSerializer,
 		responses={
-			200: OpenApiResponse(description='Inicio de sesión correcto.'),
+			200: OpenApiResponse(
+				description='Inicio correcto; devuelve el rol y nombre, con JWT en cookies HttpOnly.',
+			),
 			400: OpenApiResponse(description='Datos de entrada inválidos.'),
 			401: OpenApiResponse(description='Credenciales incorrectas.'),
 			500: OpenApiResponse(description='No fue posible procesar la solicitud.'),
 		},
 	)
 	def post(self, request):
+		enforce_csrf(request)
 		serializer = LoginWriteSerializer(data=request.data)
 		if not serializer.is_valid():
 			return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -82,7 +107,7 @@ class LoginView(APIView):
 		users = list(
 			user_model.objects.filter(
 				email__iexact=values['correo_electronico'],
-			).order_by('pk')[:2]
+			).only('pk', 'is_active', user_model.USERNAME_FIELD).order_by('pk')[:2]
 		)
 		if len(users) != 1:
 			return Response(
@@ -108,18 +133,81 @@ class LoginView(APIView):
 			return _error_servidor()
 
 		refresh = RefreshToken.for_user(user)
-		return Response({
-			'access': str(refresh.access_token),
-			'refresh': str(refresh),
+		response = Response({
 			'role': profile.rol,
-			'user': {
-				'id': str(profile.pk),
-				'nombre_completo': profile.nombre_completo,
-				'correo_electronico': user.email,
-				'telefono': profile.telefono,
-				'direccion_retorno_predeterminada': profile.direccion_retorno,
-			},
+			'nombre_completo': profile.nombre_completo,
 		})
+		set_access_cookie(response, str(refresh.access_token))
+		set_refresh_cookie(response, str(refresh))
+		return response
+
+
+class CurrentUserProfileView(APIView):
+	@extend_schema(
+		operation_id='auth_current_profile',
+		summary='Obtener el perfil del usuario autenticado',
+		responses={
+			200: OpenApiResponse(description='Datos de perfil necesarios para una reserva.'),
+			401: OpenApiResponse(description='Sesión no válida.'),
+			404: OpenApiResponse(description='Perfil de usuario no encontrado.'),
+		},
+	)
+	def get(self, request):
+		try:
+			profile = request.user.perfil
+		except Usuario.DoesNotExist:
+			return Response(
+				{'detail': 'No se encontró el perfil de la cuenta autenticada.'},
+				status=status.HTTP_404_NOT_FOUND,
+			)
+
+		return Response({
+			'nombre_completo': profile.nombre_completo,
+			'correo_electronico': request.user.email,
+			'telefono': profile.telefono,
+			'direccion_retorno_predeterminada': profile.direccion_retorno,
+		})
+
+
+class RefreshCookieView(APIView):
+	authentication_classes = []
+	permission_classes = [AllowAny]
+
+	def post(self, request):
+		enforce_csrf(request)
+		raw_refresh = request.COOKIES.get(settings.JWT_REFRESH_COOKIE_NAME)
+		if not raw_refresh:
+			return self._unauthorized()
+
+		try:
+			refresh = RefreshToken(raw_refresh)
+			CookieJWTAuthentication().get_user(refresh)
+		except (TokenError, AuthenticationFailed):
+			return self._unauthorized()
+
+		response = Response({'detail': 'Sesión renovada.'})
+		set_access_cookie(response, str(refresh.access_token))
+		return response
+
+	@staticmethod
+	def _unauthorized():
+		response = Response(
+			{'detail': 'La sesión ya no es válida. Inicia sesión nuevamente.'},
+			status=status.HTTP_401_UNAUTHORIZED,
+		)
+		clear_auth_cookies(response)
+		return response
+
+
+class LogoutView(APIView):
+	authentication_classes = []
+	permission_classes = [AllowAny]
+
+	def post(self, request):
+		enforce_csrf(request)
+		response = Response(status=status.HTTP_204_NO_CONTENT)
+		clear_auth_cookies(response)
+		return response
 
 
 class RegistroView(APIView):
@@ -138,6 +226,7 @@ class RegistroView(APIView):
 		},
 	)
 	def post(self, request):
+		enforce_csrf(request)
 		serializer = RegistroWriteSerializer(data=request.data)
 		if not serializer.is_valid():
 			return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
