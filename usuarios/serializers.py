@@ -23,7 +23,7 @@ class UsuarioWriteSerializer(serializers.Serializer):
     correo_electronico = serializers.EmailField()
     contrasenia = serializers.CharField(write_only=True, min_length=8, max_length=128)
     rol = serializers.ChoiceField(
-        choices=('usuario', 'pasajero', 'administrador'),
+        choices=('pasajero', 'administrador'),
         required=False,
     )
     perfil_pasajero = serializers.JSONField(required=False, allow_null=True)
@@ -45,7 +45,7 @@ class UsuarioReadSerializer(serializers.Serializer):
 
 class PerfilUsuarioWriteSerializer(serializers.Serializer):
     nombre_completo = serializers.CharField(max_length=200)
-    correo_electronico = serializers.CharField(max_length=254)
+    correo_electronico = serializers.EmailField(max_length=254)
     contrasenia = serializers.CharField(write_only=True, max_length=128, trim_whitespace=False)
 
 
