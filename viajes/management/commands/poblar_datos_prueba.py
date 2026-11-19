@@ -181,7 +181,7 @@ class Command(BaseCommand):
                             'id_transaccion': f'TEST-TRX-{viaje_id}-{numero:02d}',
                             'monto': 32000 + indice * 3000,
                             'metodo_pago': 'transferencia',
-                            'estado': 'completado',
+                            'estado': 'confirmado',
                             'fecha_pago': now,
                         }],
                     },

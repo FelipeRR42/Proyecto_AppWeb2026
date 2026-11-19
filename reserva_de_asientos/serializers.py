@@ -44,13 +44,26 @@ class ReservaWriteSerializer(StrictSerializer):
 
 
 class ReservaUpdateSerializer(StrictSerializer):
-    tipo_viaje = serializers.ChoiceField(choices=('ida', 'ida_vuelta'))
+    tipo_viaje = serializers.ChoiceField(
+        choices=('ida', 'ida_vuelta'),
+        required=False,
+    )
+    asientos = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=False,
+        required=False,
+    )
     direccion_retorno = serializers.CharField(
         max_length=200,
         allow_blank=True,
         allow_null=True,
         required=False,
     )
+
+    def validate_asientos(self, value):
+        if len(value) != len(set(value)):
+            raise serializers.ValidationError('No se permiten asientos repetidos.')
+        return value
 
 
 class ReservaReadSerializer(serializers.Serializer):
@@ -66,6 +79,10 @@ class ReservaReadSerializer(serializers.Serializer):
         required=False,
     )
     bloqueado_hasta = serializers.DateTimeField(required=False, allow_null=True)
+    pagos = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+    )
 
     def get_id_reserva(self, reserva) -> str:
         return str(reserva['_id'])

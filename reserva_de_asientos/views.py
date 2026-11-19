@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from bson import ObjectId
 from drf_spectacular.utils import OpenApiResponse, extend_schema
@@ -10,7 +11,11 @@ from rest_framework.views import APIView
 
 from config.mongo import get_mongo_db
 from usuarios.models import Usuario
-from usuarios.permissions import IsPassengerOrAdministrator, is_app_administrator
+from usuarios.permissions import (
+    IsAppAdministrator,
+    IsPassengerOrAdministrator,
+    is_app_administrator,
+)
 from .serializers import (
     ReservaReadSerializer,
     ReservaUpdateSerializer,
@@ -67,6 +72,12 @@ def _crear_documento(
     reserva_id,
     bloqueado_hasta,
 ):
+    pago_id = f'SIM-{uuid4().hex}'
+    monto = (
+        viaje.get('precio_ida_y_vuelta')
+        if values['tipo_viaje'] == 'ida_vuelta'
+        else viaje.get('precio_ida')
+    )
     return {
         '_id': reserva_id,
         'fecha_reserva': datetime.now(timezone.utc),
@@ -83,7 +94,13 @@ def _crear_documento(
             for numero in values['asientos']
         ],
         'bloqueado_hasta': bloqueado_hasta,
-        'pagos': [],
+        'pagos': [{
+            'id_transaccion': pago_id,
+            'monto': monto,
+            'metodo_pago': 'simulado',
+            'estado': 'pendiente',
+            'fecha_creacion': datetime.now(timezone.utc),
+        }],
     }
 
 
@@ -291,6 +308,52 @@ class ReservaDetailView(APIView):
                 )
 
             updates = dict(serializer.validated_data)
+            nuevos_asientos = updates.pop('asientos', None)
+            if nuevos_asientos is not None:
+                viaje_id = reserva.get('viaje_reservado', {}).get('id_viaje_reservado')
+                viejos_asientos = [
+                    asiento['num_asiento']
+                    for asiento in reserva.get('asientos_reservados', [])
+                    if 'num_asiento' in asiento
+                ]
+                viejos_asientos = sorted(set(viejos_asientos))
+                nuevos_asientos = sorted(set(nuevos_asientos))
+                if viejos_asientos != nuevos_asientos:
+                    if viaje_id is None:
+                        return _reserva_no_encontrada()
+
+                    liberar_asientos_reserva(
+                        db.viajes,
+                        viaje_id,
+                        viejos_asientos,
+                        object_id,
+                    )
+                    bloqueada_hasta = reserva.get('bloqueado_hasta')
+                    bloqueado = bloquear_asientos(
+                        db.viajes,
+                        viaje_id,
+                        nuevos_asientos,
+                        object_id,
+                        bloqueada_hasta,
+                        datetime.now(timezone.utc),
+                    )
+                    if not bloqueado:
+                        bloquear_asientos(
+                            db.viajes,
+                            viaje_id,
+                            viejos_asientos,
+                            object_id,
+                            bloqueada_hasta,
+                            datetime.now(timezone.utc),
+                        )
+                        return Response(
+                            {'detail': 'Uno o más asientos ya no están disponibles.'},
+                            status=status.HTTP_409_CONFLICT,
+                        )
+                    updates['asientos_reservados'] = [
+                        {'num_asiento': numero}
+                        for numero in nuevos_asientos
+                    ]
             if updates:
                 collection.update_one({'_id': object_id}, {'$set': updates})
                 reserva = collection.find_one({'_id': object_id})
@@ -325,12 +388,12 @@ class ReservaDetailView(APIView):
             reserva = db.reservas.find_one({'_id': object_id})
             if reserva is None or not self._puede_acceder(request.user, reserva):
                 return _reserva_no_encontrada()
-            if reserva.get('estado') != 'pendiente':
+            if reserva.get('estado') not in ('pendiente', 'confirmada'):
                 return Response(
-                    {'detail': 'Solo se pueden cancelar reservas pendientes.'},
+                    {'detail': 'Solo se pueden cancelar reservas pendientes o confirmadas.'},
                     status=status.HTTP_409_CONFLICT,
                 )
-            if not _liberar_reserva_pendiente(db, reserva, 'cancelada'):
+            if not _cancelar_reserva(db, reserva):
                 return Response(
                     {'detail': 'La reserva cambió mientras se procesaba.'},
                     status=status.HTTP_409_CONFLICT,
@@ -375,12 +438,12 @@ class ReservaCancelView(APIView):
             reserva = db.reservas.find_one({'_id': object_id})
             if reserva is None or not ReservaDetailView._puede_acceder(request.user, reserva):
                 return _reserva_no_encontrada()
-            if reserva.get('estado') != 'pendiente':
+            if reserva.get('estado') not in ('pendiente', 'confirmada'):
                 return Response(
-                    {'detail': 'Solo se pueden cancelar reservas pendientes.'},
+                    {'detail': 'Solo se pueden cancelar reservas pendientes o confirmadas.'},
                     status=status.HTTP_409_CONFLICT,
                 )
-            if not _liberar_reserva_pendiente(db, reserva, 'cancelada'):
+            if not _cancelar_reserva(db, reserva):
                 return Response(
                     {'detail': 'La reserva cambió mientras se procesaba.'},
                     status=status.HTTP_409_CONFLICT,
@@ -397,10 +460,26 @@ class ReservaCancelView(APIView):
             return _error_servidor()
 
 
-def _liberar_reserva_pendiente(db, reserva, nuevo_estado):
+def _cancelar_reserva(db, reserva):
+    estado_actual = reserva.get('estado')
+    nuevo_estado = 'reembolsada' if estado_actual == 'confirmada' else 'cancelada'
     result = db.reservas.update_one(
-        {'_id': reserva['_id'], 'estado': 'pendiente'},
-        {'$set': {'estado': nuevo_estado}},
+        {'_id': reserva['_id'], 'estado': estado_actual},
+        {
+            '$set': {
+                'estado': nuevo_estado,
+                'pagos': [
+                    {
+                        **pago,
+                        'estado': 'reembolsado',
+                        'fecha_reembolso': datetime.now(timezone.utc),
+                    }
+                    if estado_actual == 'confirmada' and pago.get('estado') == 'confirmado'
+                    else pago
+                    for pago in (reserva.get('pagos') or [])
+                ],
+            }
+        },
     )
     if result.modified_count == 0:
         return False
@@ -431,3 +510,152 @@ def _compensar_bloqueo(db, serializer, numeros_asiento, reserva_id):
         )
     except PyMongoError:
         logger.exception('No se pudo liberar un bloqueo tras fallar la reserva.')
+
+
+class _ReservaPagoView(APIView):
+    permission_classes = [IsAppAdministrator]
+    nuevo_estado_pago = None
+    nuevo_estado_reserva = None
+
+    def post(self, request, reserva_id):
+        object_id, error = ReservaDetailView._object_id(reserva_id)
+        if error is not None:
+            return error
+
+        try:
+            db = get_mongo_db()
+            liberar_bloqueos_vencidos(db)
+            reserva = db.reservas.find_one({'_id': object_id})
+            if reserva is None or not ReservaDetailView._puede_acceder(request.user, reserva):
+                return _reserva_no_encontrada()
+            if reserva.get('estado') != 'pendiente':
+                return Response(
+                    {'detail': 'La reserva venció o ya fue procesada.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            pagos = reserva.get('pagos') or []
+            if not pagos:
+                return Response(
+                    {'detail': 'La reserva no tiene un pago asociado.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            pago = pagos[-1]
+            estado_actual = pago.get('estado')
+            if estado_actual != 'pendiente':
+                return Response(
+                    {'detail': 'El pago ya fue procesado.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            ahora = datetime.now(timezone.utc)
+            pago['estado'] = self.nuevo_estado_pago
+            pago['fecha_actualizacion'] = ahora
+            if self.nuevo_estado_pago == 'confirmado':
+                pago['fecha_pago'] = ahora
+
+            reserva_actualizada = db.reservas.update_one(
+                {'_id': object_id, 'estado': 'pendiente'},
+                {
+                    '$set': {
+                        'estado': self.nuevo_estado_reserva,
+                        'pagos': pagos,
+                    },
+                },
+            )
+            if getattr(reserva_actualizada, 'modified_count', 1) == 0:
+                return Response(
+                    {'detail': 'La reserva cambió mientras se procesaba el pago.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            reserva['estado'] = self.nuevo_estado_reserva
+            reserva['pagos'] = pagos
+
+            viaje_id = reserva.get('viaje_reservado', {}).get('id_viaje_reservado')
+            numeros = [
+                asiento['num_asiento']
+                for asiento in reserva.get('asientos_reservados', [])
+                if 'num_asiento' in asiento
+            ]
+            if self.nuevo_estado_pago == 'confirmado':
+                db.viajes.update_one(
+                    {'_id': viaje_id},
+                    {
+                        '$set': {
+                            'asientos.$[asiento].estado': 'reservado',
+                            'asientos.$[asiento].bloqueado_hasta': None,
+                        },
+                    },
+                    array_filters=[
+                        {
+                            'asiento.num_asiento': {'$in': numeros},
+                            'asiento.reserva_id': object_id,
+                        }
+                    ],
+                )
+            else:
+                liberar_asientos_reserva(db.viajes, viaje_id, numeros, object_id)
+
+            return Response(ReservaReadSerializer(reserva).data)
+        except PyMongoError:
+            logger.exception('Error al actualizar el pago de la reserva.')
+            return _error_servidor()
+        except Exception:
+            logger.exception('Error inesperado al actualizar el pago.')
+            return _error_servidor()
+
+
+class ReservaPagoConfirmarView(_ReservaPagoView):
+    nuevo_estado_pago = 'confirmado'
+    nuevo_estado_reserva = 'confirmada'
+
+
+class ReservaPagoRechazarView(_ReservaPagoView):
+    nuevo_estado_pago = 'rechazado'
+    nuevo_estado_reserva = 'rechazada'
+
+
+class ReservaPagoReembolsarView(_ReservaPagoView):
+    permission_classes = [IsAppAdministrator]
+    def post(self, request, reserva_id):
+        object_id, error = ReservaDetailView._object_id(reserva_id)
+        if error is not None:
+            return error
+
+        try:
+            db = get_mongo_db()
+            reserva = db.reservas.find_one({'_id': object_id})
+            if reserva is None or not ReservaDetailView._puede_acceder(request.user, reserva):
+                return _reserva_no_encontrada()
+
+            pagos = reserva.get('pagos') or []
+            if not pagos or pagos[-1].get('estado') != 'confirmado':
+                return Response(
+                    {'detail': 'Solo se puede reembolsar un pago confirmado.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            pagos[-1]['estado'] = 'reembolsado'
+            pagos[-1]['fecha_reembolso'] = datetime.now(timezone.utc)
+            db.reservas.update_one(
+                {'_id': object_id, 'estado': {'$in': ['confirmada', 'cancelada']}},
+                {'$set': {'estado': 'reembolsada', 'pagos': pagos}},
+            )
+            reserva['estado'] = 'reembolsada'
+            reserva['pagos'] = pagos
+
+            viaje_id = reserva.get('viaje_reservado', {}).get('id_viaje_reservado')
+            numeros = [
+                asiento['num_asiento']
+                for asiento in reserva.get('asientos_reservados', [])
+                if 'num_asiento' in asiento
+            ]
+            liberar_asientos_reserva(db.viajes, viaje_id, numeros, object_id)
+            return Response(ReservaReadSerializer(reserva).data)
+        except PyMongoError:
+            logger.exception('Error al registrar el reembolso.')
+            return _error_servidor()
+        except Exception:
+            logger.exception('Error inesperado al registrar el reembolso.')
+            return _error_servidor()

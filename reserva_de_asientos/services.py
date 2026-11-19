@@ -2,6 +2,22 @@ from datetime import datetime, timedelta, timezone
 
 TIEMPO_BLOQUEO = timedelta(minutes=5)
 
+ESTADOS_RESERVA = (
+    'pendiente',
+    'confirmada',
+    'cancelada',
+    'vencida',
+    'rechazada',
+    'reembolsada',
+)
+
+ESTADOS_PAGO = (
+    'pendiente',
+    'confirmado',
+    'rechazado',
+    'reembolsado',
+)
+
 
 def liberar_bloqueos_vencidos(db, ahora=None, viaje_id=None):
     ahora = ahora or datetime.now(timezone.utc)
@@ -95,7 +111,7 @@ def liberar_asientos_reserva(viajes, viaje_id, numeros, reserva_id):
             {
                 'asiento.num_asiento': {'$in': numeros},
                 'asiento.reserva_id': reserva_id,
-                'asiento.estado': 'bloqueado',
+                'asiento.estado': {'$in': ['bloqueado', 'reservado']},
             },
         ],
     )

@@ -179,13 +179,13 @@ class ReservaApiTests(SimpleTestCase):
         self.assertEqual(reemplazar.status_code, 200)
         self.assertEqual(eliminar.status_code, 204)
         self.reservas.delete_one.assert_not_called()
+        update_filter, update_values = self.reservas.update_one.call_args.args
         self.assertEqual(
-            self.reservas.update_one.call_args.args,
-            (
-                {'_id': self.reserva_id, 'estado': 'pendiente'},
-                {'$set': {'estado': 'cancelada'}},
-            ),
+            update_filter,
+            {'_id': self.reserva_id, 'estado': 'pendiente'},
         )
+        self.assertEqual(update_values['$set']['estado'], 'cancelada')
+        self.assertIn('pagos', update_values['$set'])
 
     @patch('reserva_de_asientos.views.get_mongo_db')
     def test_identificador_invalido_devuelve_400(self, get_mongo_db):
@@ -303,10 +303,10 @@ class ReservaApiTests(SimpleTestCase):
 
         self.assertEqual(respuesta.status_code, 200)
         self.assertEqual(respuesta.data['estado'], 'cancelada')
-        self.reservas.update_one.assert_called_once_with(
-            {'_id': self.reserva_id, 'estado': 'pendiente'},
-            {'$set': {'estado': 'cancelada'}},
-        )
+        update_filter = self.reservas.update_one.call_args.args[0]
+        update_values = self.reservas.update_one.call_args.args[1]['$set']
+        self.assertEqual(update_filter, {'_id': self.reserva_id, 'estado': 'pendiente'})
+        self.assertEqual(update_values['estado'], 'cancelada')
         self.viajes.update_one.assert_called_once()
 
     @patch('reserva_de_asientos.views.get_mongo_db')
@@ -342,6 +342,99 @@ class ReservaApiTests(SimpleTestCase):
 
         self.assertEqual(respuesta.status_code, 400)
         self.reservas.update_one.assert_not_called()
+
+    @patch('reserva_de_asientos.views.get_mongo_db')
+    def test_confirmar_pago_actualiza_reserva_y_asientos(self, get_mongo_db):
+        self.client.force_authenticate(user=SimpleNamespace(
+            pk=7,
+            is_authenticated=True,
+            perfil=SimpleNamespace(rol='administrador'),
+        ))
+        reserva = {
+            **self.reserva,
+            'pagos': [{
+                'id_transaccion': 'SIM-1',
+                'monto': 32000,
+                'metodo_pago': 'simulado',
+                'estado': 'pendiente',
+            }],
+        }
+        self.reservas.find_one.return_value = reserva
+        self.reservas.update_one.return_value = SimpleNamespace(modified_count=1)
+        self.viajes.update_one.return_value = SimpleNamespace(modified_count=1)
+        get_mongo_db.return_value = self.db
+
+        respuesta = self.client.post(
+            f'/api/reservas/{self.reserva_id}/pago/confirmar/',
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.data['estado'], 'confirmada')
+        self.assertEqual(respuesta.data['pagos'][0]['estado'], 'confirmado')
+        seat_update = self.viajes.update_one.call_args.args[1]['$set']
+        self.assertEqual(
+            seat_update['asientos.$[asiento].estado'],
+            'reservado',
+        )
+
+    @patch('reserva_de_asientos.views.get_mongo_db')
+    def test_rechazar_pago_libera_asientos(self, get_mongo_db):
+        self.client.force_authenticate(user=SimpleNamespace(
+            pk=7,
+            is_authenticated=True,
+            perfil=SimpleNamespace(rol='administrador'),
+        ))
+        reserva = {
+            **self.reserva,
+            'pagos': [{
+                'id_transaccion': 'SIM-1',
+                'monto': 32000,
+                'metodo_pago': 'simulado',
+                'estado': 'pendiente',
+            }],
+        }
+        self.reservas.find_one.return_value = reserva
+        self.reservas.update_one.return_value = SimpleNamespace(modified_count=1)
+        self.viajes.update_one.return_value = SimpleNamespace(modified_count=1)
+        get_mongo_db.return_value = self.db
+
+        respuesta = self.client.post(
+            f'/api/reservas/{self.reserva_id}/pago/rechazar/',
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.data['estado'], 'rechazada')
+        self.assertEqual(respuesta.data['pagos'][0]['estado'], 'rechazado')
+
+    @patch('reserva_de_asientos.views.get_mongo_db')
+    def test_reembolsar_pago_solo_desde_pago_confirmado(self, get_mongo_db):
+        self.client.force_authenticate(user=SimpleNamespace(
+            pk=7,
+            is_authenticated=True,
+            perfil=SimpleNamespace(rol='administrador'),
+        ))
+        reserva = {
+            **self.reserva,
+            'estado': 'confirmada',
+            'pagos': [{
+                'id_transaccion': 'SIM-1',
+                'monto': 32000,
+                'metodo_pago': 'simulado',
+                'estado': 'confirmado',
+            }],
+        }
+        self.reservas.find_one.return_value = reserva
+        self.reservas.update_one.return_value = SimpleNamespace(modified_count=1)
+        self.viajes.update_one.return_value = SimpleNamespace(modified_count=1)
+        get_mongo_db.return_value = self.db
+
+        respuesta = self.client.post(
+            f'/api/reservas/{self.reserva_id}/pago/reembolsar/',
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.data['estado'], 'reembolsada')
+        self.assertEqual(respuesta.data['pagos'][0]['estado'], 'reembolsado')
 
     @patch('reserva_de_asientos.views.get_mongo_db', side_effect=ValueError('MongoDB no disponible'))
     def test_error_de_mongo_devuelve_500_estandar(self, _get_mongo_db):
