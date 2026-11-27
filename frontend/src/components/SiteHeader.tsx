@@ -1,16 +1,22 @@
 import { BusFront, LogOut } from 'lucide-react'
 import BackButton from './BackButton'
-import { getSessionUser } from '../services/auth'
+import { getSessionUser, logoutSession } from '../services/auth'
 
 export default function SiteHeader() {
   const isSearchPage = window.location.pathname.replace(/\/+$/, '') === '/viajes'
   const user = getSessionUser()
 
-  function logout() {
-    sessionStorage.removeItem('access_token')
-    sessionStorage.removeItem('user_role')
-    sessionStorage.removeItem('session_user')
-    window.location.assign('/')
+  async function logout() {
+    try {
+      await logoutSession()
+      window.location.assign('/')
+    } catch (logoutError) {
+      window.alert(
+        logoutError instanceof Error
+          ? logoutError.message
+          : 'No se pudo cerrar la sesión.',
+      )
+    }
   }
 
   return (
@@ -28,8 +34,8 @@ export default function SiteHeader() {
         {user ? (
           <>
             <div className="account-profile">
-              <strong>{user.nombre_completo}</strong>
-              <span>{user.direccion_retorno_predeterminada || user.correo_electronico}</span>
+              <strong>{user.nombre_completo || 'Sesión iniciada'}</strong>
+              <span>{user.role === 'administrador' ? 'Administrador' : 'Pasajero'}</span>
             </div>
             <button
               className="account-button account-logout"

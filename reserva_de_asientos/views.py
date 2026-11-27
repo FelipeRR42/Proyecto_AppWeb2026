@@ -9,6 +9,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from config.mongo import get_mongo_db
+from usuarios.models import Usuario
+from usuarios.permissions import IsPassengerOrAdministrator, is_app_administrator
 from .serializers import (
     ReservaReadSerializer,
     ReservaUpdateSerializer,
@@ -24,7 +26,7 @@ from .services import (
 
 logger = logging.getLogger(__name__)
 ERROR_400 = OpenApiResponse(description='Solicitud inválida o identificador mal formado.')
-ERROR_404 = OpenApiResponse(description='Reserva, pasajero o viaje no encontrado.')
+ERROR_404 = OpenApiResponse(description='Reserva o viaje no encontrado.')
 ERROR_409 = OpenApiResponse(
     description='Uno o más asientos ya no están disponibles para bloquear.'
 )
@@ -47,34 +49,34 @@ def _reserva_no_encontrada():
     )
 
 
-def _resolver_referencias(db, id_pasajero, id_viaje):
-    pasajero = db.usuarios.find_one({
-        '_id': id_pasajero,
-        'rol': 'pasajero',
-    })
-    if pasajero is None:
-        return None, None, Response(
-            {'detail': 'Pasajero no encontrado.'},
-            status=status.HTTP_404_NOT_FOUND,
-        )
-
+def _resolver_referencias(db, id_viaje):
     viaje = db.viajes.find_one({'_id': id_viaje})
     if viaje is None:
-        return None, None, Response(
+        return None, Response(
             {'detail': 'Viaje no encontrado.'},
             status=status.HTTP_404_NOT_FOUND,
         )
-    return pasajero, viaje, None
+    return viaje, None
 
 
-def _crear_documento(values, pasajero, viaje, reserva_id, bloqueado_hasta):
+def _crear_documento(
+    values,
+    pasajero_id,
+    nombre_pasajero,
+    viaje,
+    reserva_id,
+    bloqueado_hasta,
+):
     return {
         '_id': reserva_id,
         'fecha_reserva': datetime.now(timezone.utc),
         'estado': 'pendiente',
         'tipo_viaje': values['tipo_viaje'],
         'direccion_retorno': values.get('direccion_retorno'),
-        'pasajero_titular': {'id_pasajero': pasajero['_id']},
+        'pasajero_titular': {
+            'id_pasajero': str(pasajero_id),
+            'nombre_completo': nombre_pasajero,
+        },
         'viaje_reservado': {'id_viaje_reservado': viaje['_id']},
         'asientos_reservados': [
             {'num_asiento': numero}
@@ -86,6 +88,8 @@ def _crear_documento(values, pasajero, viaje, reserva_id, bloqueado_hasta):
 
 
 class ReservaListCreateView(APIView):
+    permission_classes = [IsPassengerOrAdministrator]
+
     @extend_schema(
         operation_id='reservas_listar',
         summary='Listar reservas',
@@ -95,7 +99,12 @@ class ReservaListCreateView(APIView):
         try:
             db = get_mongo_db()
             liberar_bloqueos_vencidos(db)
-            reservas = list(db.reservas.find())
+            query = {}
+            if not is_app_administrator(request.user):
+                query = {
+                    'pasajero_titular.id_pasajero': str(request.user.pk),
+                }
+            reservas = list(db.reservas.find(query))
             return Response(ReservaReadSerializer(reservas, many=True).data)
         except PyMongoError:
             logger.exception('Error al listar reservas en MongoDB.')
@@ -117,6 +126,19 @@ class ReservaListCreateView(APIView):
         },
     )
     def post(self, request):
+        try:
+            profile = request.user.perfil
+        except Usuario.DoesNotExist:
+            return Response(
+                {'detail': 'Se requiere un perfil de pasajero para reservar.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if profile.rol != Usuario.Rol.PASAJERO:
+            return Response(
+                {'detail': 'Solo las cuentas de pasajero pueden crear reservas.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         serializer = ReservaWriteSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -129,9 +151,8 @@ class ReservaListCreateView(APIView):
             db = get_mongo_db()
             liberar_bloqueos_vencidos(db)
             values = dict(serializer.validated_data)
-            pasajero, viaje, error = _resolver_referencias(
+            viaje, error = _resolver_referencias(
                 db,
-                values['id_pasajero'],
                 values['id_viaje'],
             )
             if error is not None:
@@ -158,7 +179,8 @@ class ReservaListCreateView(APIView):
 
             reserva = _crear_documento(
                 values,
-                pasajero,
+                request.user.pk,
+                profile.nombre_completo,
                 viaje,
                 reserva_id,
                 bloqueada_hasta,
@@ -182,6 +204,7 @@ class ReservaListCreateView(APIView):
 
 class ReservaDetailView(APIView):
     serializer_class = ReservaReadSerializer
+    permission_classes = [IsPassengerOrAdministrator]
 
     @staticmethod
     def _object_id(reserva_id):
@@ -210,7 +233,7 @@ class ReservaDetailView(APIView):
             db = get_mongo_db()
             liberar_bloqueos_vencidos(db)
             reserva = db.reservas.find_one({'_id': object_id})
-            if reserva is None:
+            if reserva is None or not self._puede_acceder(request.user, reserva):
                 return _reserva_no_encontrada()
             return Response(ReservaReadSerializer(reserva).data)
         except PyMongoError:
@@ -259,8 +282,13 @@ class ReservaDetailView(APIView):
             db = get_mongo_db()
             collection = db.reservas
             reserva = collection.find_one({'_id': object_id})
-            if reserva is None:
+            if reserva is None or not self._puede_acceder(request.user, reserva):
                 return _reserva_no_encontrada()
+            if reserva.get('estado') != 'pendiente':
+                return Response(
+                    {'detail': 'Solo se pueden modificar reservas pendientes.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
 
             updates = dict(serializer.validated_data)
             if updates:
@@ -278,9 +306,9 @@ class ReservaDetailView(APIView):
 
     @extend_schema(
         operation_id='reservas_eliminar',
-        summary='Eliminar reserva',
+        summary='Cancelar reserva conservando el historial',
         responses={
-            204: OpenApiResponse(description='Reserva eliminada.'),
+            204: OpenApiResponse(description='Reserva cancelada; el documento histórico se conserva.'),
             400: ERROR_400,
             404: OpenApiResponse(description='Reserva no encontrada.'),
             409: OpenApiResponse(description='La reserva cambió mientras se eliminaba.'),
@@ -293,18 +321,20 @@ class ReservaDetailView(APIView):
             return error
         try:
             db = get_mongo_db()
+            liberar_bloqueos_vencidos(db)
             reserva = db.reservas.find_one({'_id': object_id})
-            if reserva is None:
+            if reserva is None or not self._puede_acceder(request.user, reserva):
                 return _reserva_no_encontrada()
-            if reserva.get('estado') == 'pendiente':
-                if not _liberar_reserva_pendiente(db, reserva, 'cancelada'):
-                    return Response(
-                        {'detail': 'La reserva cambió mientras se procesaba.'},
-                        status=status.HTTP_409_CONFLICT,
-                    )
-            result = db.reservas.delete_one({'_id': object_id})
-            if result.deleted_count == 0:
-                return _reserva_no_encontrada()
+            if reserva.get('estado') != 'pendiente':
+                return Response(
+                    {'detail': 'Solo se pueden cancelar reservas pendientes.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if not _liberar_reserva_pendiente(db, reserva, 'cancelada'):
+                return Response(
+                    {'detail': 'La reserva cambió mientras se procesaba.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
             return Response(status=status.HTTP_204_NO_CONTENT)
         except PyMongoError:
             logger.exception('Error al eliminar reserva de MongoDB.')
@@ -313,8 +343,16 @@ class ReservaDetailView(APIView):
             logger.exception('Error inesperado al eliminar reserva.')
             return _error_servidor()
 
+    @staticmethod
+    def _puede_acceder(user, reserva):
+        if is_app_administrator(user):
+            return True
+        titular = reserva.get('pasajero_titular') or {}
+        return str(titular.get('id_pasajero', '')) == str(user.pk)
+
 class ReservaCancelView(APIView):
     serializer_class = ReservaReadSerializer
+    permission_classes = [IsPassengerOrAdministrator]
 
     @extend_schema(
         operation_id='reservas_cancelar',
@@ -335,7 +373,7 @@ class ReservaCancelView(APIView):
             db = get_mongo_db()
             liberar_bloqueos_vencidos(db)
             reserva = db.reservas.find_one({'_id': object_id})
-            if reserva is None:
+            if reserva is None or not ReservaDetailView._puede_acceder(request.user, reserva):
                 return _reserva_no_encontrada()
             if reserva.get('estado') != 'pendiente':
                 return Response(

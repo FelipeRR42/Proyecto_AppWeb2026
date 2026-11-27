@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { BusFront } from 'lucide-react'
 import BackButton from './BackButton'
-import { login } from '../services/auth'
+import { login, saveSession } from '../services/auth'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -17,9 +17,7 @@ export default function LoginPage() {
     setLoading(true)
     try {
       const session = await login(normalizedEmail, password)
-      sessionStorage.setItem('access_token', session.access)
-      sessionStorage.setItem('user_role', session.role)
-      sessionStorage.setItem('session_user', JSON.stringify(session.user))
+      saveSession(session)
       window.location.assign(session.role === 'administrador' ? '/admin/' : '/')
     } catch (loginError) {
       setError(

@@ -2,10 +2,12 @@ from bson import ObjectId
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from pymongo.errors import DuplicateKeyError, PyMongoError
 from rest_framework import status
+from rest_framework.permissions import SAFE_METHODS
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from config.mongo import get_mongo_db
+from usuarios.permissions import IsAppAdministrator
 from .vehiculos_serializers import VehiculoReadSerializer, VehiculoWriteSerializer
 
 
@@ -27,6 +29,11 @@ def _error_servidor():
 
 
 class VehiculoListCreateView(APIView):
+	def get_permissions(self):
+		if self.request.method in SAFE_METHODS:
+			return super().get_permissions()
+		return [IsAppAdministrator()]
+
 	@extend_schema(
 		operation_id='vehiculos_listar',
 		summary='Listar vehículos',
@@ -70,6 +77,11 @@ class VehiculoListCreateView(APIView):
 
 
 class VehiculoDetailView(APIView):
+	def get_permissions(self):
+		if self.request.method in SAFE_METHODS:
+			return super().get_permissions()
+		return [IsAppAdministrator()]
+
 	@extend_schema(
 		operation_id='vehiculos_obtener',
 		summary='Obtener vehículo por patente',

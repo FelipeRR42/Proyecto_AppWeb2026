@@ -1,296 +1,171 @@
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
-
-from bson import ObjectId
+from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password
-from django.test import SimpleTestCase
+from django.test import TestCase
 from rest_framework.test import APIClient
-from datetime import datetime, timezone
-from django.contrib.auth.hashers import make_password
+
+from usuarios.models import Usuario
 
 
-class UsuarioApiTests(SimpleTestCase):
-	def setUp(self):
-		self.client = APIClient()
-		self.usuario_id = ObjectId()
-		self.usuario = {
-			'_id': self.usuario_id,
-			'nombre_completo': 'Ana Pérez',
-			'correo_electronico': 'ana@example.com',
-			'contrasenia': 'pbkdf2_sha256$test',
-			'rol': 'pasajero',
-			'perfil_pasajero': {'telefono': '5551234'},
-			'perfil_admin': None,
-		}
-		self.collection = MagicMock()
-		self.database = SimpleNamespace(usuarios=self.collection)
+class UsuarioApiTests(TestCase):
+    def setUp(self):
+        user_model = get_user_model()
+        self.admin = user_model.objects.create_user(
+            username='admin@example.test',
+            email='admin@example.test',
+            password='Boleto-admin-2026!',
+        )
+        Usuario.objects.create(
+            cuenta=self.admin,
+            nombre_completo='Administradora de prueba',
+            rol=Usuario.Rol.ADMINISTRADOR,
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.admin)
 
-	@patch('usuarios.views.get_mongo_db')
-	def test_lista_usuarios_devuelve_200_sin_contrasenias(self, get_mongo_db):
-		self.collection.find.return_value = [self.usuario]
-		get_mongo_db.return_value = self.database
+    def test_usuario_listado_lee_perfiles_de_postgresql(self):
+        passenger = get_user_model().objects.create_user(
+            username='ana@example.test',
+            email='ana@example.test',
+            password='Boleto-pasajero-2026!',
+        )
+        Usuario.objects.create(
+            cuenta=passenger,
+            nombre_completo='Ana Pérez',
+            rol=Usuario.Rol.PASAJERO,
+            telefono='5551234',
+            direccion_retorno='Av. Central 123',
+        )
 
-		response = self.client.get('/api/usuarios/')
+        response = self.client.get('/api/usuarios/')
 
-		self.assertEqual(response.status_code, 200)
-		self.assertEqual(response.data[0]['id'], str(self.usuario_id))
-		self.assertNotIn('contrasenia', response.data[0])
+        self.assertEqual(response.status_code, 200)
+        ana = next(item for item in response.data if item['id'] == str(passenger.pk))
+        self.assertEqual(ana['rol'], Usuario.Rol.PASAJERO)
+        self.assertEqual(ana['perfil_pasajero'], {
+            'telefono': '5551234',
+            'direccion_retorno_predeterminada': 'Av. Central 123',
+        })
+        self.assertNotIn('contrasenia', ana)
 
-	@patch('usuarios.views.get_mongo_db')
-	def test_crear_usuario_guarda_contrasenia_hasheada(self, get_mongo_db):
-		self.collection.find_one.side_effect = [None, self.usuario]
-		self.collection.insert_one.return_value = SimpleNamespace(inserted_id=self.usuario_id)
-		get_mongo_db.return_value = self.database
+    def test_crear_usuario_guarda_cuenta_y_rol_en_postgresql(self):
+        response = self.client.post('/api/usuarios/', {
+            'nombre_completo': 'Ana Pérez',
+            'correo_electronico': 'ana@example.test',
+            'contrasenia': 'Boleto-pasajero-2026!',
+            'rol': 'pasajero',
+            'perfil_pasajero': {
+                'telefono': '5551234',
+                'direccion_retorno_predeterminada': 'Av. Central 123',
+            },
+        }, format='json')
 
-		response = self.client.post('/api/usuarios/', {
-			'nombre_completo': 'Ana Pérez',
-			'correo_electronico': 'ana@example.com',
-			'contrasenia': 'clave-segura-123',
-		}, format='json')
+        self.assertEqual(response.status_code, 201)
+        account = get_user_model().objects.get(email='ana@example.test')
+        profile = Usuario.objects.get(cuenta=account)
+        self.assertTrue(check_password('Boleto-pasajero-2026!', account.password))
+        self.assertEqual(response.data['id'], str(account.pk))
+        self.assertEqual(profile.rol, Usuario.Rol.PASAJERO)
+        self.assertEqual(profile.direccion_retorno, 'Av. Central 123')
 
-		self.assertEqual(response.status_code, 201)
-		saved = self.collection.insert_one.call_args.args[0]
-		self.assertTrue(check_password('clave-segura-123', saved['contrasenia']))
-		self.assertNotIn('contrasenia', response.data)
+    def test_creacion_de_usuario_rechaza_correo_duplicado(self):
+        get_user_model().objects.create_user(
+            username='ana@example.test',
+            email='ana@example.test',
+            password='Boleto-pasajero-2026!',
+        )
 
-	@patch('usuarios.views.get_mongo_db')
-	def test_login_devuelve_token_y_rol_para_credenciales_correctas(self, get_mongo_db):
-		usuario = {
-			**self.usuario,
-			'contrasenia': make_password('clave-de-prueba'),
-			'perfil_pasajero': {
-				'telefono': '5551234',
-				'direccion_retorno_predeterminada': 'Av. Central 123',
-			},
-		}
-		self.collection.find_one.return_value = usuario
-		get_mongo_db.return_value = self.database
+        response = self.client.post('/api/usuarios/', {
+            'nombre_completo': 'Otra Ana',
+            'correo_electronico': 'ANA@example.test',
+            'contrasenia': 'Boleto-pasajero-2026!',
+        }, format='json')
 
-		response = self.client.post('/api/auth/login/', {
-			'correo_electronico': usuario['correo_electronico'],
-			'contrasenia': 'clave-de-prueba',
-		}, format='json')
+        self.assertEqual(response.status_code, 409)
 
-		self.assertEqual(response.status_code, 200)
-		self.assertTrue(response.data['access'])
-		self.assertEqual(response.data['role'], 'pasajero')
-		self.assertEqual(response.data['user']['id'], str(self.usuario_id))
-		self.assertEqual(response.data['user']['nombre_completo'], 'Ana Pérez')
-		self.assertEqual(response.data['user']['telefono'], '5551234')
-		self.assertEqual(response.data['user']['direccion_retorno_predeterminada'], 'Av. Central 123')
+    def test_endpoints_de_usuario_usan_ids_de_postgresql_y_desactivan_sin_borrar(self):
+        account = get_user_model().objects.create_user(
+            username='ana@example.test',
+            email='ana@example.test',
+            password='Boleto-pasajero-2026!',
+        )
+        Usuario.objects.create(
+            cuenta=account,
+            nombre_completo='Ana Pérez',
+            rol=Usuario.Rol.PASAJERO,
+        )
 
-	@patch('usuarios.views.get_mongo_db')
-	def test_login_rechaza_contrasenia_incorrecta(self, get_mongo_db):
-		usuario = {**self.usuario, 'contrasenia': make_password('clave-correcta')}
-		self.collection.find_one.return_value = usuario
-		get_mongo_db.return_value = self.database
+        update = self.client.patch(
+            f'/api/usuarios/{account.pk}/',
+            {'nombre_completo': 'Ana Nueva'},
+            format='json',
+        )
+        delete = self.client.delete(f'/api/usuarios/{account.pk}/')
 
-		response = self.client.post('/api/auth/login/', {
-			'correo_electronico': usuario['correo_electronico'],
-			'contrasenia': 'otra-clave',
-		}, format='json')
+        self.assertEqual(update.status_code, 200)
+        self.assertEqual(update.data['nombre_completo'], 'Ana Nueva')
+        self.assertEqual(delete.status_code, 204)
+        account.refresh_from_db()
+        self.assertFalse(account.is_active)
+        self.assertTrue(Usuario.objects.filter(cuenta=account).exists())
 
-		self.assertEqual(response.status_code, 401)
+    def test_identificador_de_usuario_no_numerico_devuelve_400(self):
+        response = self.client.get('/api/usuarios/no-es-numero/')
 
-	@patch('usuarios.views.get_mongo_db')
-	def test_correo_duplicado_devuelve_409(self, get_mongo_db):
-		self.collection.find_one.return_value = self.usuario
-		get_mongo_db.return_value = self.database
+        self.assertEqual(response.status_code, 400)
 
-		response = self.client.post('/api/usuarios/', {
-			'nombre_completo': 'Ana Pérez',
-			'correo_electronico': 'ana@example.com',
-			'contrasenia': 'clave-segura-123',
-		}, format='json')
+    def test_pasajero_no_puede_administrar_usuarios(self):
+        passenger = get_user_model().objects.create_user(
+            username='pasajero@example.test',
+            email='pasajero@example.test',
+            password='Boleto-pasajero-2026!',
+        )
+        Usuario.objects.create(
+            cuenta=passenger,
+            nombre_completo='Pasajero de prueba',
+            rol=Usuario.Rol.PASAJERO,
+        )
+        self.client.force_authenticate(user=passenger)
 
-		self.assertEqual(response.status_code, 409)
+        response = self.client.get('/api/usuarios/')
 
-	@patch('usuarios.views.get_mongo_db')
-	def test_id_invalido_devuelve_400(self, get_mongo_db):
-		response = self.client.get('/api/usuarios/no-es-object-id/')
+        self.assertEqual(response.status_code, 403)
 
-		self.assertEqual(response.status_code, 400)
-		get_mongo_db.assert_not_called()
+    def test_crear_pasajero_guarda_perfil_en_postgresql(self):
+        response = self.client.post('/api/pasajeros/', {
+            'nombre_completo': 'Ana Pérez',
+            'correo_electronico': 'ana@example.test',
+            'contrasenia': 'Boleto-pasajero-2026!',
+            'direccion_retorno_predeterminada': 'Av. Central 123',
+            'telefono': '5551234',
+        }, format='json')
 
-	@patch('usuarios.views.get_mongo_db')
-	def test_usuario_inexistente_devuelve_404(self, get_mongo_db):
-		self.collection.find_one.return_value = None
-		get_mongo_db.return_value = self.database
+        self.assertEqual(response.status_code, 201)
+        account = get_user_model().objects.get(email='ana@example.test')
+        profile = Usuario.objects.get(cuenta=account)
+        self.assertEqual(profile.rol, Usuario.Rol.PASAJERO)
+        self.assertEqual(profile.telefono, '5551234')
+        self.assertEqual(profile.direccion_retorno, 'Av. Central 123')
 
-		response = self.client.get(f'/api/usuarios/{self.usuario_id}/')
+    def test_crear_administrador_guarda_fecha_y_telefono_en_postgresql(self):
+        response = self.client.post('/api/administradores/', {
+            'nombre_completo': 'Camila Rojas',
+            'correo_electronico': 'camila@example.test',
+            'contrasenia': 'Boleto-admin-2026!',
+            'fecha_contratacion': '2026-01-15',
+            'telefono_corporativo': '5559876',
+        }, format='json')
 
-		self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 201)
+        profile = Usuario.objects.get(cuenta__email='camila@example.test')
+        self.assertEqual(profile.rol, Usuario.Rol.ADMINISTRADOR)
+        self.assertEqual(profile.fecha_contratacion.isoformat(), '2026-01-15')
+        self.assertEqual(profile.telefono_corporativo, '5559876')
 
-	@patch('usuarios.views.get_mongo_db')
-	def test_error_de_mongo_devuelve_500(self, get_mongo_db):
-		get_mongo_db.side_effect = ValueError('MongoDB no configurada')
+    def test_actualizar_pasajero_no_puede_modificar_un_administrador(self):
+        response = self.client.patch(
+            f'/api/pasajeros/{self.admin.pk}/',
+            {'telefono': '5551234'},
+            format='json',
+        )
 
-		response = self.client.get('/api/usuarios/')
-
-		self.assertEqual(response.status_code, 500)
-
-	@patch('usuarios.views.get_mongo_db')
-	def test_actualizar_y_eliminar_usuario(self, get_mongo_db):
-		self.collection.find_one.side_effect = [self.usuario, {**self.usuario, 'nombre_completo': 'Ana Nueva'}]
-		self.collection.update_one.return_value = SimpleNamespace(modified_count=1)
-		self.collection.delete_one.return_value = SimpleNamespace(deleted_count=1)
-		get_mongo_db.return_value = self.database
-
-		update_response = self.client.patch(
-			f'/api/usuarios/{self.usuario_id}/',
-			{'nombre_completo': 'Ana Nueva'},
-			format='json',
-		)
-		delete_response = self.client.delete(f'/api/usuarios/{self.usuario_id}/')
-
-		self.assertEqual(update_response.status_code, 200)
-		self.assertEqual(delete_response.status_code, 204)
-
-	@patch('usuarios.views.get_mongo_db')
-	def test_crear_pasajero_guarda_perfil_anidado(self, get_mongo_db):
-		pasajero = {
-			**self.usuario,
-			'rol': 'pasajero',
-			'perfil_pasajero': {
-				'direccion_retorno_predeterminada': 'Av. Central 123',
-				'telefono': '5551234',
-			},
-			'perfil_admin': None,
-		}
-		self.collection.find_one.side_effect = [None, pasajero]
-		self.collection.insert_one.return_value = SimpleNamespace(inserted_id=self.usuario_id)
-		get_mongo_db.return_value = self.database
-
-		response = self.client.post('/api/pasajeros/', {
-			'nombre_completo': 'Ana Pérez',
-			'correo_electronico': 'ana@example.com',
-			'contrasenia': 'clave-segura-123',
-			'direccion_retorno_predeterminada': 'Av. Central 123',
-			'telefono': '5551234',
-		}, format='json')
-
-		self.assertEqual(response.status_code, 201)
-		documento = self.collection.insert_one.call_args.args[0]
-		self.assertEqual(documento['rol'], 'pasajero')
-		self.assertEqual(documento['perfil_pasajero']['telefono'], '5551234')
-		self.assertIsNone(documento['perfil_admin'])
-
-	@patch('usuarios.views.get_mongo_db')
-	def test_crear_pasajero_acepta_credenciales_sin_validacion_de_formato(self, get_mongo_db):
-		self.collection.find_one.side_effect = [None, self.usuario]
-		self.collection.insert_one.return_value = SimpleNamespace(inserted_id=self.usuario_id)
-		get_mongo_db.return_value = self.database
-
-		response = self.client.post('/api/pasajeros/', {
-			'nombre_completo': 'Ana Pérez',
-			'correo_electronico': 'correo-de-prueba',
-			'contrasenia': 'x',
-			'direccion_retorno_predeterminada': 'Casa',
-			'telefono': '123',
-		}, format='json')
-
-		self.assertEqual(response.status_code, 201)
-
-	@patch('usuarios.views.get_mongo_db')
-	def test_crear_administrador_guarda_fecha_y_perfil(self, get_mongo_db):
-		administrador = {
-			**self.usuario,
-			'rol': 'administrador',
-			'perfil_pasajero': None,
-			'perfil_admin': {
-				'fecha_contratacion': datetime(2026, 1, 15, tzinfo=timezone.utc),
-				'telefono_corporativo': '5559876',
-			},
-		}
-		self.collection.find_one.side_effect = [None, administrador]
-		self.collection.insert_one.return_value = SimpleNamespace(inserted_id=self.usuario_id)
-		get_mongo_db.return_value = self.database
-
-		response = self.client.post('/api/administradores/', {
-			'nombre_completo': 'Ana Pérez',
-			'correo_electronico': 'ana@example.com',
-			'contrasenia': 'clave-segura-123',
-			'fecha_contratacion': '2026-01-15',
-			'telefono_corporativo': '5559876',
-		}, format='json')
-
-		self.assertEqual(response.status_code, 201)
-		documento = self.collection.insert_one.call_args.args[0]
-		self.assertEqual(documento['rol'], 'administrador')
-		self.assertEqual(documento['perfil_admin']['fecha_contratacion'].date().isoformat(), '2026-01-15')
-		self.assertIsNone(documento['perfil_pasajero'])
-
-	@patch('usuarios.views.get_mongo_db')
-	def test_listar_pasajeros_filtra_por_rol(self, get_mongo_db):
-		self.collection.find.return_value = [self.usuario]
-		get_mongo_db.return_value = self.database
-
-		response = self.client.get('/api/pasajeros/')
-
-		self.assertEqual(response.status_code, 200)
-		self.collection.find.assert_called_once_with({'rol': 'pasajero'})
-
-	@patch('usuarios.views.get_mongo_db')
-	def test_detalle_pasajero_no_expone_administrador(self, get_mongo_db):
-		self.collection.find_one.return_value = None
-		get_mongo_db.return_value = self.database
-
-		response = self.client.get(f'/api/pasajeros/{self.usuario_id}/')
-
-		self.assertEqual(response.status_code, 404)
-		self.collection.find_one.assert_called_once_with({'_id': self.usuario_id, 'rol': 'pasajero'})
-
-	@patch('usuarios.views.get_mongo_db')
-	def test_actualizar_y_eliminar_pasajero_filtra_por_rol(self, get_mongo_db):
-		pasajero = {
-			**self.usuario,
-			'perfil_pasajero': {'telefono': '5550000'},
-		}
-		self.collection.find_one.side_effect = [pasajero, pasajero]
-		self.collection.delete_one.return_value = SimpleNamespace(deleted_count=1)
-		get_mongo_db.return_value = self.database
-
-		update_response = self.client.patch(
-			f'/api/pasajeros/{self.usuario_id}/',
-			{'telefono': '5550001'},
-			format='json',
-		)
-		delete_response = self.client.delete(f'/api/pasajeros/{self.usuario_id}/')
-
-		self.assertEqual(update_response.status_code, 200)
-		self.assertEqual(delete_response.status_code, 204)
-		self.collection.update_one.assert_called_once_with(
-			{'_id': self.usuario_id, 'rol': 'pasajero'},
-			{'$set': {'perfil_pasajero.telefono': '5550001'}},
-		)
-		self.collection.delete_one.assert_called_once_with({'_id': self.usuario_id, 'rol': 'pasajero'})
-
-	@patch('usuarios.views.get_mongo_db')
-	def test_actualizar_y_eliminar_administrador_filtra_por_rol(self, get_mongo_db):
-		administrador = {
-			**self.usuario,
-			'rol': 'administrador',
-			'perfil_pasajero': None,
-			'perfil_admin': {
-				'fecha_contratacion': datetime(2026, 1, 15, tzinfo=timezone.utc),
-				'telefono_corporativo': '5550000',
-			},
-		}
-		self.collection.find_one.side_effect = [administrador, administrador]
-		self.collection.delete_one.return_value = SimpleNamespace(deleted_count=1)
-		get_mongo_db.return_value = self.database
-
-		update_response = self.client.patch(
-			f'/api/administradores/{self.usuario_id}/',
-			{'telefono_corporativo': '5550001'},
-			format='json',
-		)
-		delete_response = self.client.delete(f'/api/administradores/{self.usuario_id}/')
-
-		self.assertEqual(update_response.status_code, 200)
-		self.assertEqual(delete_response.status_code, 204)
-		self.collection.update_one.assert_called_once_with(
-			{'_id': self.usuario_id, 'rol': 'administrador'},
-			{'$set': {'perfil_admin.telefono_corporativo': '5550001'}},
-		)
-		self.collection.delete_one.assert_called_once_with({'_id': self.usuario_id, 'rol': 'administrador'})
+        self.assertEqual(response.status_code, 404)

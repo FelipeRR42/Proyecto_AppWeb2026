@@ -5,10 +5,13 @@ from bson import ObjectId
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from pymongo.errors import PyMongoError
 from rest_framework import status
+from rest_framework.permissions import SAFE_METHODS
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from config.mongo import get_mongo_db
+from .models import Usuario
+from .permissions import IsAppAdministrator, IsPassengerOrAdministrator, is_app_administrator
 from .notificacion_serializers import (
     NotificacionReadSerializer,
     NotificacionWriteSerializer,
@@ -37,34 +40,25 @@ def _error_no_encontrada():
     )
 
 
-def _validar_referencias(db, values):
-    administrador = None
-    if 'id_admin' in values:
-        administrador = db.usuarios.find_one({
-            '_id': values['id_admin'],
-            'rol': 'administrador',
-        })
-        if administrador is None:
-            return None, Response(
-                {'id_admin': ['Administrador no encontrado.']},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
+def _validar_destinatarios(values):
     destinatarios = values.get('destinatarios')
     if destinatarios is not None and destinatarios:
-        pasajero_ids = [item['id_pasajero'] for item in destinatarios]
-        pasajeros = db.usuarios.find({
-            '_id': {'$in': pasajero_ids},
-            'rol': 'pasajero',
-        })
-        encontrados = {pasajero['_id'] for pasajero in pasajeros}
-        if any(pasajero_id not in encontrados for pasajero_id in pasajero_ids):
-            return None, Response(
+        pasajero_ids = {item['id_pasajero'] for item in destinatarios}
+        encontrados = set(
+            Usuario.objects.filter(
+                cuenta_id__in=pasajero_ids,
+                rol=Usuario.Rol.PASAJERO,
+            ).values_list('cuenta_id', flat=True)
+        )
+        if pasajero_ids - encontrados:
+            return Response(
                 {'destinatarios': ['Uno o más pasajeros no existen.']},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        for destinatario in destinatarios:
+            destinatario['id_pasajero'] = str(destinatario['id_pasajero'])
 
-    return administrador, None
+    return None
 
 
 def _destinatarios_publicos(destinatarios):
@@ -78,6 +72,11 @@ def _destinatarios_publicos(destinatarios):
 
 
 class NotificacionListCreateView(APIView):
+    def get_permissions(self):
+        if self.request.method in SAFE_METHODS:
+            return [IsPassengerOrAdministrator()]
+        return [IsAppAdministrator()]
+
     @extend_schema(
         operation_id='notificaciones_listar',
         summary='Listar notificaciones',
@@ -85,7 +84,10 @@ class NotificacionListCreateView(APIView):
     )
     def get(self, request):
         try:
-            notificaciones = list(get_mongo_db().notificaciones.find())
+            query = {}
+            if not is_app_administrator(request.user):
+                query = {'destinatarios.id_pasajero': str(request.user.pk)}
+            notificaciones = list(get_mongo_db().notificaciones.find(query))
             return Response(NotificacionReadSerializer(notificaciones, many=True).data)
         except (PyMongoError, ValueError):
             logger.exception('Error al listar notificaciones.')
@@ -111,9 +113,10 @@ class NotificacionListCreateView(APIView):
         try:
             db = get_mongo_db()
             values = dict(serializer.validated_data)
-            administrador, error = _validar_referencias(db, values)
+            error = _validar_destinatarios(values)
             if error is not None:
                 return error
+            profile = request.user.perfil
 
             destinatarios = values.pop('destinatarios', [])
             notificacion = {
@@ -121,8 +124,8 @@ class NotificacionListCreateView(APIView):
                 'cuerpo': values['cuerpo'],
                 'fecha_creacion': datetime.now(timezone.utc),
                 'administrador': {
-                    'id_admin': administrador['_id'],
-                    'nombre': administrador['nombre_completo'],
+                    'id_admin': str(request.user.pk),
+                    'nombre': profile.nombre_completo,
                 },
                 'destinatarios': destinatarios,
             }
@@ -141,6 +144,11 @@ class NotificacionListCreateView(APIView):
 
 
 class NotificacionDetailView(APIView):
+    def get_permissions(self):
+        if self.request.method in SAFE_METHODS:
+            return [IsPassengerOrAdministrator()]
+        return [IsAppAdministrator()]
+
     def _notificacion_id(self, notificacion_id):
         if not ObjectId.is_valid(notificacion_id):
             return None, Response(
@@ -164,7 +172,10 @@ class NotificacionDetailView(APIView):
         if error is not None:
             return error
         try:
-            notificacion = get_mongo_db().notificaciones.find_one({'_id': object_id})
+            query = {'_id': object_id}
+            if not is_app_administrator(request.user):
+                query['destinatarios.id_pasajero'] = str(request.user.pk)
+            notificacion = get_mongo_db().notificaciones.find_one(query)
             if notificacion is None:
                 return _error_no_encontrada()
             return Response(NotificacionReadSerializer(notificacion).data)
@@ -218,7 +229,7 @@ class NotificacionDetailView(APIView):
                 return _error_no_encontrada()
 
             values = dict(serializer.validated_data)
-            administrador, error = _validar_referencias(db, values)
+            error = _validar_destinatarios(values)
             if error is not None:
                 return error
 
@@ -226,11 +237,6 @@ class NotificacionDetailView(APIView):
             for field in ('titulo', 'cuerpo', 'destinatarios'):
                 if field in values:
                     updates[field] = values[field]
-            if administrador is not None:
-                updates['administrador'] = {
-                    'id_admin': administrador['_id'],
-                    'nombre': administrador['nombre_completo'],
-                }
             if not partial and 'destinatarios' not in updates:
                 updates['destinatarios'] = []
 

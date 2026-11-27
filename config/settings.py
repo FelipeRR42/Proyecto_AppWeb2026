@@ -12,7 +12,8 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 
 from pathlib import Path
 from decouple import config
-
+from datetime import timedelta
+from django.core.exceptions import ImproperlyConfigured
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -24,7 +25,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = config('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = config('DEBUG', cast=bool, default=False)
 
 ALLOWED_HOSTS = [
     host.strip() for host in config('ALLOWED_HOSTS', default='localhost,127.0.0.1,testserver,.onrender.com').split(',') if host.strip()
@@ -63,6 +64,48 @@ MIDDLEWARE = [
 CORS_ALLOWED_ORIGINS = [
     'https://proyecto-app-web2026.vercel.app',
 ]
+CORS_ALLOW_CREDENTIALS = True
+
+_default_csrf_trusted_origins = [
+    'https://proyecto-app-web2026.vercel.app',
+]
+if DEBUG:
+    _default_csrf_trusted_origins.extend([
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+        'http://192.168.56.1:5173',
+    ])
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in config(
+        'CSRF_TRUSTED_ORIGINS',
+        default=','.join(_default_csrf_trusted_origins),
+    ).split(',')
+    if origin.strip()
+]
+
+JWT_SIGNING_KEY = config('JWT_SIGNING_KEY', default=SECRET_KEY)
+JWT_ACCESS_COOKIE_NAME = 'access_token'
+JWT_REFRESH_COOKIE_NAME = 'refresh_token'
+JWT_ACCESS_COOKIE_PATH = '/api/'
+JWT_REFRESH_COOKIE_PATH = '/api/auth/'
+JWT_COOKIE_SECURE = config('JWT_COOKIE_SECURE', cast=bool, default=not DEBUG)
+JWT_COOKIE_SAMESITE = config(
+    'JWT_COOKIE_SAMESITE',
+    default='Lax' if DEBUG else 'None',
+)
+if JWT_COOKIE_SAMESITE not in {'Lax', 'Strict', 'None'}:
+    raise ImproperlyConfigured('JWT_COOKIE_SAMESITE must be Lax, Strict or None.')
+if not DEBUG and not JWT_COOKIE_SECURE:
+    raise ImproperlyConfigured('JWT_COOKIE_SECURE must be True when DEBUG is False.')
+if JWT_COOKIE_SAMESITE == 'None' and not JWT_COOKIE_SECURE:
+    raise ImproperlyConfigured('SameSite=None cookies require JWT_COOKIE_SECURE=True.')
+
+CSRF_COOKIE_NAME = 'csrftoken'
+CSRF_COOKIE_PATH = '/api/'
+CSRF_COOKIE_HTTPONLY = True
+CSRF_COOKIE_SECURE = JWT_COOKIE_SECURE
+CSRF_COOKIE_SAMESITE = JWT_COOKIE_SAMESITE
 
 ROOT_URLCONF = 'config.urls'
 
@@ -95,7 +138,7 @@ DATABASES = {
         'PASSWORD': config('DB_PASSWORD'),
         'HOST': config('DB_HOST'),
         'PORT': config('DB_PORT', default='5432'),
-        'OPTIONS': {'sslmode': 'require'},
+        'OPTIONS': {'sslmode': config('DB_SSLMODE', default='require')},
     }
 }
 
@@ -161,6 +204,17 @@ MAILERS = {
 
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'usuarios.authentication.CookieJWTAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=5),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'SIGNING_KEY': JWT_SIGNING_KEY,
 }
 
 SPECTACULAR_SETTINGS = {
